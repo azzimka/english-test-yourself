@@ -195,25 +195,14 @@ async def process_unsupported_media_upload(message: types.Message):
 
 
 async def render_test_preview(message: types.Message, parsed_dict: dict, test_type: str, state: FSMContext):
+    type_name = "Олимпиадный" if test_type == "olympiad" else "Обычный"
     preview_lines = [
         "✅ <b>Тест успешно распознан!</b>\n",
         f"📌 <b>Название:</b> {html.escape(parsed_dict['title'])}",
         f"📊 <b>Всего вопросов:</b> {len(parsed_dict['questions'])}",
-        f"🏷 <b>Категория:</b> {'Олимпиадный' if test_type == 'olympiad' else 'Обычный'}\n",
-        "<b>Примеры первых вопросов:</b>"
+        f"🏷 <b>Категория:</b> {type_name}\n",
+        "Опубликовать этот тест для учеников?"
     ]
-
-    for i, q in enumerate(parsed_dict["questions"][:3], start=1):
-        opts = ", ".join(q["options"]) if q.get("options") else "Ввод слова"
-        preview_lines.append(f"\n<b>{i}. {html.escape(q['question_text'])}</b>")
-        if q.get("options"):
-            preview_lines.append(f"   Варианты: {html.escape(opts)}")
-        preview_lines.append(f"   👉 Ответ: <code>{html.escape(str(q['correct_answer']))}</code>")
-
-    if len(parsed_dict["questions"]) > 3:
-        preview_lines.append(f"\n<i>...и еще {len(parsed_dict['questions']) - 3} вопросов.</i>")
-
-    preview_lines.append("\nОпубликовать этот тест для учеников?")
 
     await message.edit_text("\n".join(preview_lines), reply_markup=get_confirm_test_kb(), parse_mode="HTML")
     await state.set_state(UploadTestStates.waiting_for_confirmation)
