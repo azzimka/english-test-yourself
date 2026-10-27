@@ -3,7 +3,7 @@ import time
 from aiogram import Router, types, F
 from aiogram.filters import CommandStart, Command
 from aiogram.fsm.context import FSMContext
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo, BotCommand, BotCommandScopeChat
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo
 
 from config import ADMIN_IDS, WEBAPP_URL
 from database import get_user_by_telegram_id, register_student
@@ -85,19 +85,6 @@ async def cmd_start(event: types.Message | types.CallbackQuery, state: FSMContex
 
         # 1. Сценарий учителя (администратора)
         if user_id in ADMIN_IDS:
-            try:
-                await event.bot.set_my_commands(
-                    [
-                        BotCommand(command="start", description="🚀 Главное меню"),
-                        BotCommand(command="create_test", description="📝 Создать тест"),
-                        BotCommand(command="my_tests", description="📂 Мои тесты"),
-                        BotCommand(command="results", description="📊 Результаты"),
-                    ],
-                    scope=BotCommandScopeChat(chat_id=user_id)
-                )
-            except Exception:
-                pass
-
             first_name = html.escape(event.from_user.first_name or "Учитель")
             text = (
                 f"👩‍🏫 <b>Здравствуйте, {first_name}!</b>\n\n"

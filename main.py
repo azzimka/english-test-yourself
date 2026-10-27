@@ -17,27 +17,22 @@ logger = logging.getLogger(__name__)
 
 async def setup_bot_ui(bot: Bot):
     """Configures bot commands menu and welcome description for first-time users."""
-    student_commands = [
+    commands = [
         BotCommand(command="start", description="🚀 Главное меню"),
     ]
     try:
-        await bot.set_my_commands(student_commands, scope=BotCommandScopeDefault())
-        logger.info("Default bot commands menu configured successfully.")
+        await bot.set_my_commands(commands, scope=BotCommandScopeDefault())
+        logger.info("Bot commands menu configured with /start only.")
     except Exception as e:
         logger.warning("Could not set default bot commands: %s", e)
 
-    admin_commands = [
-        BotCommand(command="start", description="🚀 Главное меню"),
-        BotCommand(command="create_test", description="📝 Создать тест"),
-        BotCommand(command="my_tests", description="📂 Мои тесты"),
-        BotCommand(command="results", description="📊 Результаты"),
-    ]
+    # Clean up any previously set chat-specific commands so everyone sees only /start
     for admin_id in ADMIN_IDS:
         try:
-            await bot.set_my_commands(admin_commands, scope=BotCommandScopeChat(chat_id=admin_id))
-            logger.info("Admin commands configured for %s", admin_id)
+            await bot.delete_my_commands(scope=BotCommandScopeChat(chat_id=admin_id))
+            logger.info("Cleared custom chat commands for admin %s", admin_id)
         except Exception as e:
-            logger.debug("Could not set admin commands for %s: %s", admin_id, e)
+            logger.debug("Could not delete custom commands for %s: %s", admin_id, e)
 
     desc = (
         "🇬🇧 English Lab\n\n"
