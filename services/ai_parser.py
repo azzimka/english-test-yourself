@@ -110,7 +110,7 @@ QUESTION_START_PATTERN = re.compile(
 )
 
 ANSWER_KEY_PATTERN = re.compile(
-    r"(?:ANSWER\s*KEY|ANSWERS|KEYS|КЛЮЧИ|ОТВЕТЫ)[\s:]*(.*)$",
+    r"(?:^|\n)\s*(?:ANSWER\s*KEY[S]?|ANSWERS|KEYS|ОТВЕТЫ|КЛЮЧИ)\b[\s:]*(.*)$",
     re.IGNORECASE | re.DOTALL
 )
 
@@ -410,7 +410,9 @@ async def parse_single_chunk(
     """
     user_content_parts = [f"Parse ALL questions from this batch:\n\n{chunk_text}"]
     if answer_keys_text:
-        user_content_parts.append(f"\n\nANSWER KEY (use this for correct_answer):\n{answer_keys_text}")
+        user_content_parts.append(
+            f"\n\nANSWER KEY REFERENCE (Use ONLY to look up the correct_answer for the questions in THIS batch. Do NOT generate questions from this key):\n{answer_keys_text}"
+        )
 
     user_content = "".join(user_content_parts)
 
@@ -588,6 +590,20 @@ async def _parse_chunked(
     if not all_questions:
         raise RuntimeError("Не удалось извлечь ни одного вопроса из теста.")
 
+    # Deduplicate questions if any chunk overlap occurred
+    deduped_questions = []
+    seen = set()
+    for q in all_questions:
+        q_text_norm = re.sub(r"\s+", " ", q.get("question_text", "").strip().lower())
+        opts_norm = tuple(re.sub(r"\s+", " ", opt.strip().lower()) for opt in q.get("options", []))
+        key = (q_text_norm, opts_norm)
+        if key in seen and q_text_norm:
+            logger.warning("Dropped duplicate question from chunk overlap: %s", q.get("question_text", "")[:50])
+            continue
+        seen.add(key)
+        deduped_questions.append(q)
+    all_questions = deduped_questions
+
     # --- Build ParsedTest ---
     parsed_questions = [ParsedQuestion(**q) for q in all_questions]
     parsed = ParsedTest(
@@ -635,7 +651,9 @@ async def _extract_title(
     )
     cleaned = clean_json_string(raw)
     data = json.loads(cleaned)
-    return data.get("title", "English Test"), data.get("description", "")
+    raw_title = data.get("title", "English Test")
+    cleaned_title = re.sub(r"\s*-\s*Page\s+\d+.*$", "", raw_title, flags=re.IGNORECASE).strip()
+    return cleaned_title or raw_title, data.get("description", "")
 
 
 def _verify_question_completeness(questions: List[ParsedQuestion], body_text: str):

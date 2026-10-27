@@ -855,6 +855,16 @@ def test_65_answer_key_formats():
     body3, keys3 = extract_answer_keys(text3)
     assert "КЛЮЧИ" in keys3
 
+    # Test that words like "monkeys" or "keys" in the middle of sentences do NOT trigger answer key extraction
+    text4 = (
+        "1. Question one\nA) a\nB) b\n"
+        "At the zoo, we see lions, monkeys and big elephants.\n"
+        "2. Question two\nA) c\nB) d\n"
+    )
+    body4, keys4 = extract_answer_keys(text4)
+    assert keys4 == ""
+    assert "monkeys" in body4
+
 
 # --- 66: reading passage kept with its questions ---
 def test_66_reading_passage_kept_together():
