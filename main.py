@@ -27,24 +27,23 @@ async def setup_bot_ui(bot: Bot):
     except Exception as e:
         logger.warning("Could not set bot commands: %s", e)
 
-    try:
-        await bot.set_my_description(
-            description=(
-                "🇬🇧 English Lab\n\n"
-                "👩‍🏫 Учитель: загружает тесты и утверждает оценки.\n"
-                "🎓 Ученик: решает задания и получает результат."
-            )
-        )
-        logger.info("Bot welcome description configured successfully.")
-    except Exception as e:
-        logger.warning("Could not set bot description: %s", e)
+    desc = (
+        "🇬🇧 English Lab\n\n"
+        "👩‍🏫 Учитель: загружает тесты и утверждает оценки.\n"
+        "🎓 Ученик: решает задания и получает результат."
+    )
+    for lang in [None, "ru"]:
+        try:
+            await bot.set_my_description(description=desc, language_code=lang)
+        except Exception as e:
+            logger.warning("Could not set bot description for %s: %s", lang, e)
 
-    try:
-        await bot.set_my_short_description(
-            short_description="Школьные тесты и олимпиады по английскому языку."
-        )
-    except Exception as e:
-        logger.warning("Could not set bot short description: %s", e)
+    short_desc = "Школьные тесты и олимпиады по английскому языку."
+    for lang in [None, "ru"]:
+        try:
+            await bot.set_my_short_description(short_description=short_desc, language_code=lang)
+        except Exception as e:
+            logger.warning("Could not set bot short description for %s: %s", lang, e)
 
 async def main():
     logger.info("Initializing database...")
@@ -56,10 +55,10 @@ async def main():
     logger.info("Setting up bot commands and welcome screens...")
     await setup_bot_ui(bot)
 
-    # Register routers
+    # Register routers (common_router MUST be first to handle /start and reset states unconditionally)
+    dp.include_router(common_router)
     dp.include_router(admin_router)
     dp.include_router(student_router)
-    dp.include_router(common_router)
 
     # Setup Mini App web server
     app = create_web_app(bot)

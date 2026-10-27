@@ -148,7 +148,7 @@ async def cmd_start(event: types.Message | types.CallbackQuery, state: FSMContex
 
 
 # --- Сценарий регистрации ученика ---
-@router.message(RegistrationStates.waiting_for_full_name)
+@router.message(RegistrationStates.waiting_for_full_name, F.text, ~F.text.startswith("/"))
 async def process_full_name(message: types.Message, state: FSMContext):
     full_name = message.text.strip()
     if len(full_name.split()) < 2:
@@ -168,7 +168,7 @@ async def process_full_name(message: types.Message, state: FSMContext):
     await state.set_state(RegistrationStates.waiting_for_class)
 
 
-@router.message(RegistrationStates.waiting_for_class)
+@router.message(RegistrationStates.waiting_for_class, F.text, ~F.text.startswith("/"))
 async def process_class(message: types.Message, state: FSMContext):
     class_name = message.text.strip().upper()
     data = await state.get_data()

@@ -135,7 +135,7 @@ async def process_skip_title(callback: types.CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
-@router.message(UploadTestStates.waiting_for_title, F.text)
+@router.message(UploadTestStates.waiting_for_title, F.text, ~F.text.startswith("/"))
 async def process_custom_title(message: types.Message, state: FSMContext):
     title = message.text.strip()
     await state.update_data(custom_title=title)
@@ -178,7 +178,7 @@ async def process_photo_rejected(message: types.Message):
     )
 
 
-@router.message(UploadTestStates.waiting_for_content, F.text | F.document)
+@router.message(UploadTestStates.waiting_for_content, (F.text & ~F.text.startswith("/")) | F.document)
 async def process_test_upload(message: types.Message, state: FSMContext, bot: Bot):
     data = await state.get_data()
     test_type = data.get("test_type", "regular")
@@ -313,7 +313,7 @@ async def start_editing_title(callback: types.CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
-@router.message(UploadTestStates.editing_title, F.text)
+@router.message(UploadTestStates.editing_title, F.text, ~F.text.startswith("/"))
 async def process_new_title(message: types.Message, state: FSMContext):
     new_title = message.text.strip()
     data = await state.get_data()

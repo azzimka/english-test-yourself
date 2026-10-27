@@ -191,7 +191,7 @@ async def process_quiz_button_answer(callback: types.CallbackQuery, state: FSMCo
 
 
 # Ответ текстовым вводом (для открытых вопросов)
-@router.message(QuizStates.solving, F.text)
+@router.message(QuizStates.solving, F.text, ~F.text.startswith("/"))
 async def process_quiz_text_answer(message: types.Message, state: FSMContext):
     data = await state.get_data()
     q_idx = data["current_index"]
