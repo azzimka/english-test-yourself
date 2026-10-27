@@ -61,9 +61,8 @@ async def parse_test_content(
     else:
         raise ValueError("Either text_content or (file_bytes and mime_type) must be provided.")
 
-    # Try primary model, then fallback if busy
-    models_to_try = [GEMINI_MODEL, "gemini-3.8-flash", "gemini-flash-latest"]
-    # remove duplicates while preserving order
+    # Try primary model first (gemini-3.6-flash is fastest and most responsive)
+    models_to_try = [GEMINI_MODEL, "gemini-3.6-flash", "gemini-3.8-flash"]
     models_to_try = list(dict.fromkeys(models_to_try))
 
     last_error = None
