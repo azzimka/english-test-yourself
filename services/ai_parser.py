@@ -95,6 +95,7 @@ Return ONLY the raw JSON object."""
 
 CHUNK_SIZE = 25  # Target number of questions per chunk
 MAX_SINGLE_BATCH = 25  # Max questions for single (non-chunked) request
+MAX_SINGLE_CHARS = 3500  # Max character length for single request (safety threshold against token cutoffs)
 
 # Fallback models for Groq API
 GROQ_FALLBACK_MODELS = [
@@ -105,7 +106,7 @@ GROQ_FALLBACK_MODELS = [
 
 # Regex patterns
 QUESTION_START_PATTERN = re.compile(
-    r"(?:^|\n)\s*(\d+)\s*(?:[.):\-]\s*|\s+(?=[A-ZА-ЯЁ]))",
+    r"(?:^|\n)\s*(?:Question|Task|Exercise|Задание|Вопрос|Item|№)?\s*(\d+)\s*(?:[.):\-]\s*|\s+(?=[A-ZА-ЯЁ]))",
     re.MULTILINE
 )
 
@@ -155,6 +156,51 @@ def extract_answer_keys(text: str) -> Tuple[str, str]:
     return text, ""
 
 
+def extract_max_key_number(answer_keys_text: str) -> int:
+    """
+    Extract the highest question number found in the Answer Key block.
+    Supports formats like '1 A', '1. A', '1) B', 'Q1: C', etc.
+    """
+    if not answer_keys_text:
+        return 0
+    matches = re.findall(
+        r"(?:^|\s|[.,;:(\[])(?:Q|q|Question|№)?\s*(\d+)\s*[:.)\-]?\s*([A-Da-d]|True|False|Not Given)\b",
+        answer_keys_text
+    )
+    if matches:
+        return max(int(m[0]) for m in matches)
+    nums = re.findall(r"\b(\d{1,3})\b", answer_keys_text)
+    valid_nums = [int(n) for n in nums if 1 <= int(n) <= 500]
+    return max(valid_nums) if valid_nums else 0
+
+
+def estimate_test_scale(body_text: str, answer_keys_text: str = "") -> Tuple[int, int, bool]:
+    """
+    Estimates the scale of the test based on 3 independent signals:
+    1. Maximum question number in Answer Key
+    2. Detected question start markers via regex
+    3. Character volume of the document (Safety Net)
+
+    Returns:
+        Tuple of (estimated_question_count, max_key_number, is_large_test)
+    """
+    detected_count = len(_find_question_positions(body_text))
+    max_key = extract_max_key_number(answer_keys_text)
+    char_len = len(body_text.strip())
+
+    estimated_count = max(detected_count, max_key)
+    if estimated_count == 0 and char_len > MAX_SINGLE_CHARS:
+        estimated_count = max(26, char_len // 200)
+
+    is_large = (
+        detected_count > MAX_SINGLE_BATCH
+        or max_key > MAX_SINGLE_BATCH
+        or char_len > MAX_SINGLE_CHARS
+    )
+
+    return estimated_count, max_key, is_large
+
+
 def _find_question_positions(text: str) -> List[Tuple[int, int]]:
     """
     Find all question start positions in the text.
@@ -192,6 +238,55 @@ def _find_reading_passage_positions(text: str) -> List[int]:
     return positions
 
 
+def split_test_by_windows(
+    text: str,
+    max_chunk_chars: int = 3500,
+    overlap_chars: int = 350
+) -> List[str]:
+    """
+    Fallback chunking for documents without clear question numbers.
+    Splits text by paragraphs into chunks of ~max_chunk_chars
+    with overlap_chars overlap to prevent splitting questions across boundaries.
+    """
+    text = text.strip()
+    if not text:
+        return []
+    if len(text) <= max_chunk_chars:
+        return [text]
+
+    paragraphs = re.split(r"(\n\s*\n+)", text)
+    chunks = []
+    current_chunk = []
+    current_len = 0
+
+    for part in paragraphs:
+        part_len = len(part)
+        if current_len + part_len > max_chunk_chars and current_chunk:
+            chunk_str = "".join(current_chunk).strip()
+            if chunk_str:
+                chunks.append(chunk_str)
+            # Retain tail for overlap
+            overlap_accum = []
+            overlap_len = 0
+            for item in reversed(current_chunk):
+                overlap_accum.insert(0, item)
+                overlap_len += len(item)
+                if overlap_len >= overlap_chars:
+                    break
+            current_chunk = overlap_accum + [part]
+            current_len = sum(len(x) for x in current_chunk)
+        else:
+            current_chunk.append(part)
+            current_len += part_len
+
+    if current_chunk:
+        chunk_str = "".join(current_chunk).strip()
+        if chunk_str and (not chunks or chunk_str != chunks[-1]):
+            chunks.append(chunk_str)
+
+    return chunks
+
+
 def split_test_into_chunks(body_text: str, chunk_size: int = CHUNK_SIZE) -> List[str]:
     """
     Split the test body text into chunks of approximately `chunk_size` questions.
@@ -200,19 +295,30 @@ def split_test_into_chunks(body_text: str, chunk_size: int = CHUNK_SIZE) -> List
     - Never split a question in the middle.
     - Keep reading passages together with their associated questions.
     - Target chunk_size questions per chunk.
+    - If no or few question markers are detected in a large text, fall back to paragraph windowing.
 
     Returns:
         List of text chunks.
     """
     question_positions = _find_question_positions(body_text)
+    char_len = len(body_text.strip())
 
     if not question_positions:
-        # No numbered questions found — return entire text as single chunk
+        # Fallback to paragraph windowing if text is large but no question positions found
+        if char_len > MAX_SINGLE_CHARS:
+            return split_test_by_windows(body_text, max_chunk_chars=3500, overlap_chars=350)
         return [body_text.strip()] if body_text.strip() else []
 
     total_questions = len(question_positions)
 
+    # If document is huge (>7000 chars) but we only found a tiny handful of markers,
+    # regex likely missed most questions -> use windowing fallback
+    if char_len > MAX_SINGLE_CHARS * 2 and total_questions < 10:
+        return split_test_by_windows(body_text, max_chunk_chars=3500, overlap_chars=350)
+
     if total_questions <= chunk_size:
+        if char_len > MAX_SINGLE_CHARS * 2:
+            return split_test_by_windows(body_text, max_chunk_chars=3500, overlap_chars=350)
         return [body_text.strip()]
 
     reading_positions = _find_reading_passage_positions(body_text)
@@ -461,20 +567,39 @@ async def parse_test_content(
     if answer_keys_text:
         logger.info("Answer key section found and extracted (%d chars)", len(answer_keys_text))
 
-    # --- Step 2: Count questions and decide strategy ---
-    question_count = count_questions_in_text(body_text)
-    logger.info("Detected approximately %d questions in the test", question_count)
+    # --- Step 2: Multi-signal test scale estimation ---
+    estimated_count, max_key, is_large_test = estimate_test_scale(body_text, answer_keys_text)
+    logger.info(
+        "Test scale evaluation: estimated_count=%d, max_key=%d, char_len=%d, is_large=%s",
+        estimated_count, max_key, len(body_text), is_large_test
+    )
 
     # Build the model fallback chain
     models = _build_model_chain()
 
-    # --- Fast path: small test (<= 25 questions) → single request ---
-    if question_count <= MAX_SINGLE_BATCH:
-        return await _parse_single_request(text_content, test_type, models)
+    # --- Chunked path: large test -> parallel processing ---
+    if is_large_test:
+        logger.info(
+            "Large test detected (%d estimated questions / %d chars). Using chunked parallel processing.",
+            estimated_count, len(body_text)
+        )
+        return await _parse_chunked(body_text, answer_keys_text, test_type, models, expected_count=estimated_count)
 
-    # --- Chunked path: large test (> 25 questions) → parallel processing ---
-    logger.info("Large test detected (%d questions). Using chunked parallel processing.", question_count)
-    return await _parse_chunked(body_text, answer_keys_text, test_type, models)
+    # --- Fast path: small test (<= 25 questions AND <= 3500 chars) ---
+    logger.info("Small test detected (%d questions). Using fast path single request.", estimated_count)
+    parsed = await _parse_single_request(text_content, test_type, models)
+
+    # --- Auto-Healing Audit for Fast Path ---
+    target_count = max(estimated_count, max_key)
+    if target_count > 0 and len(parsed.questions) < int(target_count * 0.85):
+        logger.warning(
+            "Auto-Healing triggered! Fast path parsed %d questions, but expected ~%d. "
+            "Rerunning with parallel chunked parser...",
+            len(parsed.questions), target_count
+        )
+        return await _parse_chunked(body_text, answer_keys_text, test_type, models, expected_count=target_count)
+
+    return parsed
 
 
 def _build_model_chain() -> List[str]:
@@ -540,6 +665,7 @@ async def _parse_chunked(
     answer_keys_text: str,
     test_type: str,
     models: List[str],
+    expected_count: int = 0,
 ) -> ParsedTest:
     """
     Parse a large test using parallel chunked processing.
@@ -621,7 +747,7 @@ async def _parse_chunked(
     )
 
     # --- Verify numbering completeness ---
-    _verify_question_completeness(parsed_questions, body_text)
+    _verify_question_completeness(parsed_questions, body_text, expected_count=expected_count)
 
     return parsed
 
@@ -659,21 +785,25 @@ async def _extract_title(
     return cleaned_title or raw_title, data.get("description", "")
 
 
-def _verify_question_completeness(questions: List[ParsedQuestion], body_text: str):
+def _verify_question_completeness(
+    questions: List[ParsedQuestion],
+    body_text: str,
+    expected_count: int = 0
+):
     """
-    Log a warning if the parsed question count doesn't match
-    the number of questions detected in the original text.
+    Log verification of question completeness against detected positions or expected count.
     """
-    expected = count_questions_in_text(body_text)
+    detected = count_questions_in_text(body_text)
+    expected = max(detected, expected_count)
     actual = len(questions)
 
-    if expected > 0 and actual < expected:
+    if expected > 0 and actual < int(expected * 0.85):
         logger.warning(
             "Question count mismatch! Expected ~%d questions but parsed %d. "
             "Some questions may have been lost.",
             expected, actual
         )
-    elif actual >= expected:
+    else:
         logger.info(
             "Question completeness verified: parsed %d questions (expected ~%d)",
             actual, expected

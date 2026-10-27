@@ -1131,4 +1131,121 @@ def test_77_question_numbers_space_only_and_skip_zero():
     assert cnt == 3, f"Expected 3 questions (1, 2, 3), but detected {cnt}"
 
 
+# --- 78: extract_max_key_number tests ---
+def test_78_extract_max_key_number():
+    from services.ai_parser import extract_max_key_number
+
+    # Table format
+    keys1 = "1 A 11 D 21 B 31 D 41 B 51 B 61 B 70 D"
+    assert extract_max_key_number(keys1) == 70
+
+    # Prefix format
+    keys2 = "Q1: A, Q2: B, Q15: C, Q45: D"
+    assert extract_max_key_number(keys2) == 45
+
+    # Dot format
+    keys3 = "1. True\n2. False\n30. Not Given"
+    assert extract_max_key_number(keys3) == 30
+
+    # Empty
+    assert extract_max_key_number("") == 0
+    assert extract_max_key_number("No keys provided") == 0
+
+
+# --- 79: estimate_test_scale multi-signal tests ---
+def test_79_estimate_test_scale():
+    from services.ai_parser import estimate_test_scale
+
+    # Case A: Small test with 5 questions and short text
+    text_small = "1. Q1\n2. Q2\n3. Q3\n4. Q4\n5. Q5"
+    cnt, max_k, is_large = estimate_test_scale(text_small, "")
+    assert cnt == 5
+    assert max_k == 0
+    assert is_large is False
+
+    # Case B: Large test indicated by Answer Key
+    text_with_keys = "Some intro text.\n1. Q1\n2. Q2"
+    key_block = "1 A\n2 B\n50 C"
+    cnt, max_k, is_large = estimate_test_scale(text_with_keys, key_block)
+    assert max_k == 50
+    assert cnt == 50
+    assert is_large is True
+
+    # Case C: Large test indicated by physical text volume (>3500 chars) despite 0 detected questions
+    text_huge_no_numbers = "This is a reading story. " * 200  # ~5000 chars
+    cnt, max_k, is_large = estimate_test_scale(text_huge_no_numbers, "")
+    assert is_large is True
+    assert cnt >= 25
+
+
+# --- 80: split_test_by_windows fallback chunking ---
+def test_80_split_test_by_windows():
+    from services.ai_parser import split_test_by_windows
+
+    # Short text
+    short_text = "Short text under threshold."
+    chunks_short = split_test_by_windows(short_text, max_chunk_chars=3500)
+    assert len(chunks_short) == 1
+    assert chunks_short[0] == short_text
+
+    # Long text with paragraphs
+    paragraphs = [f"Paragraph {i}: " + ("English sentence. " * 20) for i in range(1, 30)]
+    long_text = "\n\n".join(paragraphs)
+    assert len(long_text) > 7000
+
+    chunks_long = split_test_by_windows(long_text, max_chunk_chars=3500, overlap_chars=300)
+    assert len(chunks_long) >= 2
+    # Ensure paragraphs are not destroyed in the middle
+    for chunk in chunks_long:
+        assert "Paragraph" in chunk
+
+
+# --- 81: Auto-Healing logic in parse_test_content ---
+@pytest.mark.asyncio
+async def test_81_auto_healing_recovery(monkeypatch):
+    from unittest.mock import AsyncMock
+    from services.ai_parser import parse_test_content, ParsedTest, ParsedQuestion
+
+    # Create dummy text with keys indicating 40 questions
+    dummy_text = "1. Q1\n2. Q2\n3. Q3\nANSWER KEY: 1 A ... 40 D"
+
+    # Simulate single request returning only 5 questions (undercount)
+    mock_single_parsed = ParsedTest(
+        title="Mock Test",
+        description="",
+        questions=[
+            ParsedQuestion(question_text=f"Q{i}", options=["A) 1", "B) 2"], correct_answer="A")
+            for i in range(1, 6)
+        ]
+    )
+
+    # Simulate chunked request returning all 40 questions
+    mock_chunked_parsed = ParsedTest(
+        title="Mock Test (Chunked)",
+        description="",
+        questions=[
+            ParsedQuestion(question_text=f"Q{i}", options=["A) 1", "B) 2"], correct_answer="A")
+            for i in range(1, 41)
+        ]
+    )
+
+    # Monkeypatch _parse_single_request and _parse_chunked
+    single_mock = AsyncMock(return_value=mock_single_parsed)
+    chunked_mock = AsyncMock(return_value=mock_chunked_parsed)
+
+    import services.ai_parser as aip
+    monkeypatch.setattr(aip, "_parse_single_request", single_mock)
+    monkeypatch.setattr(aip, "_parse_chunked", chunked_mock)
+
+    # If is_large_test is forced to False to enter fast path:
+    monkeypatch.setattr(aip, "estimate_test_scale", lambda b, k: (40, 40, False))
+
+    res = await parse_test_content(dummy_text, test_type="regular")
+
+    # Fast path parsed only 5 (< 40 * 0.85), so auto-healing must have called _parse_chunked
+    assert chunked_mock.called
+    assert len(res.questions) == 40
+
+
+
 
