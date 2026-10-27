@@ -36,7 +36,6 @@ def get_test_type_choice_kb() -> InlineKeyboardMarkup:
 
 def get_title_choice_kb() -> InlineKeyboardMarkup:
     kb = [
-        [InlineKeyboardButton(text="✨ Пусть ИИ определит название", callback_data="skip_title")],
         [InlineKeyboardButton(text="❌ Отмена", callback_data="cancel_action")]
     ]
     return InlineKeyboardMarkup(inline_keyboard=kb)

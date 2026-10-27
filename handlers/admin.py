@@ -121,8 +121,7 @@ async def process_test_type_choice(callback: types.CallbackQuery, state: FSMCont
     await callback.message.edit_text(
         f"Выбрана категория: <b>{type_name}</b>\n\n"
         "✍️ <b>Как назовем этот тест?</b>\n"
-        "Напишите название сообщением (например: <i>Unit 4: Conditionals</i> или <i>Школьная олимпиада 10 класс</i>):\n\n"
-        "<i>Или нажмите кнопку ниже, чтобы ИИ определил название сам из материалов файла.</i>",
+        "Напишите название сообщением (например: <i>Unit 4: Conditionals</i> или <i>Школьная олимпиада 10 класс</i>):",
         reply_markup=get_title_choice_kb(),
         parse_mode="HTML"
     )
@@ -132,9 +131,7 @@ async def process_test_type_choice(callback: types.CallbackQuery, state: FSMCont
 
 @router.callback_query(F.data == "skip_title", UploadTestStates.waiting_for_title)
 async def process_skip_title(callback: types.CallbackQuery, state: FSMContext):
-    await state.update_data(custom_title=None)
-    await ask_for_test_content(callback.message, state, is_edit=True)
-    await callback.answer()
+    await callback.answer("Пожалуйста, напишите название теста сообщением в чат.", show_alert=True)
 
 
 @router.message(UploadTestStates.waiting_for_title, F.text, ~F.text.startswith("/"))
@@ -147,7 +144,7 @@ async def process_custom_title(message: types.Message, state: FSMContext):
 async def ask_for_test_content(message: types.Message, state: FSMContext, is_edit: bool = False):
     data = await state.get_data()
     title = data.get("custom_title")
-    title_str = f"«{html.escape(title)}»" if title else "<i>(определит ИИ)</i>"
+    title_str = f"«{html.escape(title)}»" if title else "<i>(без названия)</i>"
 
     text = (
         f"📌 Название теста: <b>{title_str}</b>\n\n"
