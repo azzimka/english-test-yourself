@@ -982,3 +982,113 @@ def test_71_reading_at_beginning_chunking():
     assert "1. Where was the kingdom?" in chunks[0]
     assert "26. Question 26 is here." in chunks[1]
     assert "51. Question 51 is here." in chunks[2]
+
+
+# --- 72: format_size unit tests ---
+def test_72_format_size():
+    from services.channel_logger import format_size
+    assert format_size(500) == "500 Б"
+    assert format_size(2048) == "2.0 КБ"
+    assert format_size(1048576) == "1.0 МБ"
+
+
+# --- 73: log_test_material_upload with document ---
+@pytest.mark.asyncio
+async def test_73_log_test_material_upload_doc():
+    from unittest.mock import AsyncMock, MagicMock
+    from services.channel_logger import log_test_material_upload
+
+    mock_bot = MagicMock()
+    mock_bot.send_document = AsyncMock()
+    mock_bot.send_message = AsyncMock()
+
+    mock_user = MagicMock()
+    mock_user.full_name = "Anna Teacher"
+    mock_user.username = "anna_eng"
+    mock_user.id = 12345
+
+    mock_msg = MagicMock()
+    mock_msg.document = MagicMock()
+    mock_msg.document.file_id = "test_file_id_xyz"
+    mock_msg.document.file_name = "Olympiad9.pdf"
+    mock_msg.document.file_size = 50000
+    mock_msg.text = None
+
+    await log_test_material_upload(
+        bot=mock_bot,
+        user=mock_user,
+        custom_title="Olympiad Grade 9",
+        test_type="olympiad",
+        message=mock_msg
+    )
+
+    assert mock_bot.send_document.called
+    call_kwargs = mock_bot.send_document.call_args.kwargs
+    assert call_kwargs["document"] == "test_file_id_xyz"
+    assert "Anna Teacher" in call_kwargs["caption"]
+    assert "Olympiad Grade 9" in call_kwargs["caption"]
+    assert "Olympiad9.pdf" in call_kwargs["caption"]
+
+
+# --- 74: log_test_material_upload with text ---
+@pytest.mark.asyncio
+async def test_74_log_test_material_upload_text():
+    from unittest.mock import AsyncMock, MagicMock
+    from services.channel_logger import log_test_material_upload
+
+    mock_bot = MagicMock()
+    mock_bot.send_message = AsyncMock()
+    mock_bot.send_document = AsyncMock()
+
+    mock_user = MagicMock()
+    mock_user.full_name = "Boris"
+    mock_user.username = None
+    mock_user.id = 67890
+
+    mock_msg = MagicMock()
+    mock_msg.document = None
+    mock_msg.text = "1. What is the past tense of eat? A) ate B) eated"
+
+    await log_test_material_upload(
+        bot=mock_bot,
+        user=mock_user,
+        custom_title="Past Simple Quiz",
+        test_type="regular",
+        message=mock_msg
+    )
+
+    assert mock_bot.send_message.called
+    call_kwargs = mock_bot.send_message.call_args.kwargs
+    assert "Boris" in call_kwargs["text"]
+    assert "Past Simple Quiz" in call_kwargs["text"]
+    assert "What is the past tense" in call_kwargs["text"]
+
+
+# --- 75: log_test_published ---
+@pytest.mark.asyncio
+async def test_75_log_test_published():
+    from unittest.mock import AsyncMock, MagicMock
+    from services.channel_logger import log_test_published
+
+    mock_bot = MagicMock()
+    mock_bot.send_message = AsyncMock()
+
+    mock_user = MagicMock()
+    mock_user.full_name = "Anna Teacher"
+    mock_user.username = "anna_eng"
+    mock_user.id = 12345
+
+    await log_test_published(
+        bot=mock_bot,
+        user=mock_user,
+        title="Final Exam",
+        test_type="regular",
+        question_count=35
+    )
+
+    assert mock_bot.send_message.called
+    call_kwargs = mock_bot.send_message.call_args.kwargs
+    assert "Final Exam" in call_kwargs["text"]
+    assert "35" in call_kwargs["text"]
+    assert "Anna Teacher" in call_kwargs["text"]
+

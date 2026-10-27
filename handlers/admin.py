@@ -25,6 +25,11 @@ from services import (
     parse_test_content,
     ParsedTest,
 )
+from services.channel_logger import (
+    log_test_material_upload,
+    log_test_published,
+    log_test_parse_failed,
+)
 from keyboards.admin_kb import (
     get_admin_main_kb,
     get_test_type_choice_kb,
@@ -211,6 +216,19 @@ async def process_test_upload(message: types.Message, state: FSMContext, bot: Bo
     stop_event = asyncio.Event()
     anim_task = asyncio.create_task(animate_loading_status(status_msg, bot, stop_event))
 
+    custom_title = data.get("custom_title")
+    # Асинхронно отправляем копию материалов в канал логирования (не блокируя парсинг)
+    asyncio.create_task(
+        log_test_material_upload(
+            bot=bot,
+            user=message.from_user,
+            custom_title=custom_title,
+            test_type=test_type,
+            message=message,
+            text_content=text_content
+        )
+    )
+
     try:
         # Запрос к нейросети
         parsed_test: ParsedTest = await parse_test_content(
@@ -219,6 +237,15 @@ async def process_test_upload(message: types.Message, state: FSMContext, bot: Bo
         )
     except Exception as e:
         logger.exception("Error processing uploaded test")
+        asyncio.create_task(
+            log_test_parse_failed(
+                bot=bot,
+                user=message.from_user,
+                custom_title=custom_title,
+                test_type=test_type,
+                error_message=str(e)
+            )
+        )
         stop_event.set()
         try:
             await anim_task
@@ -344,6 +371,16 @@ async def confirm_publish_test(callback: types.CallbackQuery, state: FSMContext)
         created_by=callback.from_user.id,
         questions=parsed_dict.get("questions", []),
         description=parsed_dict.get("description", "")
+    )
+    # Асинхронно логируем публикацию теста в канал аудита
+    asyncio.create_task(
+        log_test_published(
+            bot=callback.bot,
+            user=callback.from_user,
+            title=parsed_dict.get("title", "Тест по английскому"),
+            test_type=test_type,
+            question_count=len(parsed_dict.get("questions", [])),
+        )
     )
     await state.clear()
 

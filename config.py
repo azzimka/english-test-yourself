@@ -35,3 +35,16 @@ WEBAPP_URL = os.getenv("WEBAPP_URL", "").rstrip("/")
 WEB_PORT = int(os.getenv("WEB_PORT", "8080"))
 WEB_HOST = os.getenv("WEB_HOST", "0.0.0.0")
 WEB_DIR = BASE_DIR / "web"
+
+# Channel for logging materials uploaded by teachers
+raw_log_channel = os.getenv("LOG_CHANNEL_ID", "-1004469948146").strip()
+if raw_log_channel:
+    try:
+        val = int(raw_log_channel)
+        if val > 0:
+            val = int(f"-100{val}")
+        LOG_CHANNEL_ID = val
+    except ValueError:
+        LOG_CHANNEL_ID = raw_log_channel
+else:
+    LOG_CHANNEL_ID = None
