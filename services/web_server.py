@@ -1,4 +1,5 @@
 import html
+import json
 import logging
 from aiohttp import web
 from aiogram import Bot
@@ -7,9 +8,13 @@ from config import WEB_DIR, ADMIN_IDS
 from database import (
     get_user_by_telegram_id,
     get_test_by_id,
+    get_tests_with_stats,
     get_test_questions,
     get_student_submission,
     save_submission,
+    get_test_submissions,
+    confirm_submission,
+    confirm_all_test_submissions,
 )
 
 logger = logging.getLogger(__name__)
@@ -23,17 +28,33 @@ def normalize_answer(text: str) -> str:
     return t
 
 
+def is_admin(tg_id) -> bool:
+    if not tg_id:
+        return False
+    try:
+        return int(tg_id) in ADMIN_IDS
+    except (ValueError, TypeError):
+        return False
+
+
 def create_web_app(bot: Bot) -> web.Application:
     app = web.Application()
     app["bot"] = bot
 
     # Static routes
     app.router.add_get("/", handle_index)
+    app.router.add_get("/teacher", handle_teacher_index)
     app.router.add_static("/static/", path=WEB_DIR, name="static")
 
-    # API routes
+    # Student API routes
     app.router.add_get("/api/test", handle_api_get_test)
     app.router.add_post("/api/submit", handle_api_submit)
+
+    # Teacher API routes
+    app.router.add_get("/api/teacher/tests", handle_api_teacher_tests)
+    app.router.add_get("/api/teacher/submissions", handle_api_teacher_submissions)
+    app.router.add_post("/api/teacher/confirm", handle_api_teacher_confirm)
+    app.router.add_post("/api/teacher/confirm-all", handle_api_teacher_confirm_all)
 
     return app
 
@@ -43,6 +64,13 @@ async def handle_index(request: web.Request) -> web.Response:
     if not index_file.exists():
         return web.Response(text="index.html not found", status=404)
     return web.FileResponse(index_file)
+
+
+async def handle_teacher_index(request: web.Request) -> web.Response:
+    teacher_file = WEB_DIR / "teacher.html"
+    if not teacher_file.exists():
+        return web.Response(text="teacher.html not found", status=404)
+    return web.FileResponse(teacher_file)
 
 
 async def handle_api_get_test(request: web.Request) -> web.Response:
@@ -172,7 +200,7 @@ async def handle_api_submit(request: web.Request) -> web.Response:
             if row:
                 student_info = dict(row)
 
-    # Notify teacher via Telegram safely with chunking
+    # Notify teacher via Telegram (compact notification)
     bot: Bot = request.app["bot"]
     pct = round((score / total) * 100) if total > 0 else 0
     minutes = time_spent // 60
@@ -181,49 +209,157 @@ async def handle_api_submit(request: web.Request) -> web.Response:
     st_name = student_info["full_name"] if student_info else "Ученик"
     st_class = student_info["class_name"] if student_info else ""
 
-    breakdown_lines = [
-        "🔔 <b>Ученик сдал тест (через Mini App)!</b>\n",
-        f"👤 <b>Ученик:</b> {html.escape(st_name)} ({html.escape(st_class)})",
-        f"📝 <b>Тест:</b> {html.escape(test['title'])}",
-        f"🎯 <b>Итоговый результат:</b> {score}/{total} ({pct}%)",
-        f"⏱ <b>Время решения:</b> {minutes} мин. {seconds} сек.\n",
-        "<b>📋 Ответы ученика:</b>"
-    ]
-
-    for idx, a in enumerate(detailed_answers, start=1):
-        status_emoji = "✅" if a.get("is_correct") else "❌"
-        q_text = a.get("question", "")
-        q_short = q_text[:45] + ("..." if len(q_text) > 45 else "")
-        user_ans = str(a.get("user_answer", ""))
-        correct_ans = str(a.get("correct_answer", ""))
-
-        breakdown_lines.append(
-            f"\n<b>{idx}. {html.escape(q_short)}</b>\n"
-            f"   Выбор ученика: <code>{html.escape(user_ans)}</code> {status_emoji}\n"
-            f"   Правильный ответ: <code>{html.escape(correct_ans)}</code>"
-        )
-
-    # Safe message chunking helper for Telegram 4096 character limit
-    chunks = []
-    current_chunk = []
-    curr_len = 0
-    for line in breakdown_lines:
-        line_len = len(line) + 1
-        if curr_len + line_len > 3800 and current_chunk:
-            chunks.append("\n".join(current_chunk))
-            current_chunk = [line]
-            curr_len = line_len
-        else:
-            current_chunk.append(line)
-            curr_len += line_len
-    if current_chunk:
-        chunks.append("\n".join(current_chunk))
+    report_text = (
+        "🔔 <b>Ученик сдал тест!</b>\n\n"
+        f"👤 <b>Ученик:</b> {html.escape(st_name)} ({html.escape(st_class)})\n"
+        f"📝 <b>Тест:</b> {html.escape(test['title'])}\n"
+        f"🎯 <b>Итоговый результат:</b> {score}/{total} ({pct}%)\n"
+        f"⏱ <b>Время решения:</b> {minutes} мин. {seconds} сек."
+    )
 
     for admin_id in ADMIN_IDS:
-        for chunk in chunks:
-            try:
-                await bot.send_message(admin_id, chunk, parse_mode="HTML")
-            except Exception as e:
-                logger.warning("Failed to notify admin %s: %s", admin_id, e)
+        try:
+            await bot.send_message(admin_id, report_text, parse_mode="HTML")
+        except Exception as e:
+            logger.warning("Failed to notify admin %s: %s", admin_id, e)
 
     return web.json_response({"success": True, "submission_id": sub_id})
+
+
+# --- Teacher API Handlers ---
+
+async def handle_api_teacher_tests(request: web.Request) -> web.Response:
+    teacher_id_str = request.query.get("teacher_id")
+    if not is_admin(teacher_id_str):
+        return web.json_response({"error": "Доступ запрещен. Только для учителей бота."}, status=403)
+
+    tests = await get_tests_with_stats()
+    return web.json_response({"tests": tests})
+
+
+async def handle_api_teacher_submissions(request: web.Request) -> web.Response:
+    teacher_id_str = request.query.get("teacher_id")
+    test_id_str = request.query.get("test_id")
+
+    if not is_admin(teacher_id_str):
+        return web.json_response({"error": "Доступ запрещен."}, status=403)
+
+    if not test_id_str:
+        return web.json_response({"error": "Не указан test_id."}, status=400)
+
+    try:
+        test_id = int(test_id_str)
+    except ValueError:
+        return web.json_response({"error": "Некорректный test_id."}, status=400)
+
+    test = await get_test_by_id(test_id)
+    if not test:
+        return web.json_response({"error": "Тест не найден."}, status=404)
+
+    raw_subs = await get_test_submissions(test_id)
+    submissions = []
+    for s in raw_subs:
+        item = dict(s)
+        try:
+            item["answers"] = json.loads(item.get("answers_json") or "[]")
+        except Exception:
+            item["answers"] = []
+        item.pop("answers_json", None)
+        submissions.append(item)
+
+    return web.json_response({
+        "test": {
+            "id": test["id"],
+            "title": test["title"],
+            "test_type": test["test_type"]
+        },
+        "submissions": submissions
+    })
+
+
+async def handle_api_teacher_confirm(request: web.Request) -> web.Response:
+    try:
+        data = await request.json()
+    except Exception:
+        return web.json_response({"error": "Невалидный JSON."}, status=400)
+
+    teacher_id = data.get("teacher_id")
+    sub_id = data.get("submission_id")
+
+    if not is_admin(teacher_id):
+        return web.json_response({"error": "Доступ запрещен."}, status=403)
+
+    if not sub_id:
+        return web.json_response({"error": "Не указан submission_id."}, status=400)
+
+    try:
+        sub_id_int = int(sub_id)
+    except ValueError:
+        return web.json_response({"error": "Некорректный submission_id."}, status=400)
+
+    updated = await confirm_submission(sub_id_int)
+    if not updated:
+        return web.json_response({"error": "Сдача не найдена."}, status=404)
+
+    # Отправляем ученику уведомление в Telegram
+    bot: Bot = request.app["bot"]
+    student_tg = updated.get("telegram_id")
+    if student_tg:
+        score = updated.get("score", 0)
+        total = updated.get("total_questions", 1)
+        pct = round((score / total) * 100) if total > 0 else 0
+        msg = (
+            "🎉 <b>Учитель проверил вашу работу!</b>\n\n"
+            f"📝 <b>Тест:</b> {html.escape(updated.get('test_title', ''))}\n"
+            f"🎯 <b>Ваш результат:</b> {score}/{total} ({pct}%)\n\n"
+            "Оценка утверждена! Вы можете посмотреть свои работы в разделе <b>«📈 Мои результаты»</b>."
+        )
+        try:
+            await bot.send_message(student_tg, msg, parse_mode="HTML")
+        except Exception as e:
+            logger.warning("Could not send confirmation to student %s: %s", student_tg, e)
+
+    return web.json_response({"success": True, "submission": updated})
+
+
+async def handle_api_teacher_confirm_all(request: web.Request) -> web.Response:
+    try:
+        data = await request.json()
+    except Exception:
+        return web.json_response({"error": "Невалидный JSON."}, status=400)
+
+    teacher_id = data.get("teacher_id")
+    test_id = data.get("test_id")
+
+    if not is_admin(teacher_id):
+        return web.json_response({"error": "Доступ запрещен."}, status=403)
+
+    if not test_id:
+        return web.json_response({"error": "Не указан test_id."}, status=400)
+
+    try:
+        test_id_int = int(test_id)
+    except ValueError:
+        return web.json_response({"error": "Некорректный test_id."}, status=400)
+
+    confirmed_rows = await confirm_all_test_submissions(test_id_int)
+    bot: Bot = request.app["bot"]
+
+    for row in confirmed_rows:
+        student_tg = row.get("telegram_id")
+        if student_tg:
+            score = row.get("score", 0)
+            total = row.get("total_questions", 1)
+            pct = round((score / total) * 100) if total > 0 else 0
+            msg = (
+                "🎉 <b>Учитель проверил вашу работу!</b>\n\n"
+                f"📝 <b>Тест:</b> {html.escape(row.get('test_title', ''))}\n"
+                f"🎯 <b>Ваш результат:</b> {score}/{total} ({pct}%)\n\n"
+                "Оценка утверждена! Вы можете посмотреть свои работы в разделе <b>«📈 Мои результаты»</b>."
+            )
+            try:
+                await bot.send_message(student_tg, msg, parse_mode="HTML")
+            except Exception as e:
+                logger.warning("Could not notify student %s: %s", student_tg, e)
+
+    return web.json_response({"success": True, "confirmed_count": len(confirmed_rows)})

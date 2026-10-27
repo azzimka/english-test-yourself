@@ -265,52 +265,21 @@ async def finish_quiz(message: types.Message, state: FSMContext):
     )
     await message.answer(student_msg, reply_markup=get_student_main_kb(), parse_mode="HTML")
 
-    # --- Подробный отчет для учителя ---
+    # Уведомление для учителя (краткая карточка)
     bot: Bot = message.bot
-    breakdown_lines = [
-        "🔔 <b>Ученик сдал тест!</b>\n",
-        f"👤 <b>Ученик:</b> {html.escape(user['full_name'])} ({html.escape(user['class_name'])})",
-        f"📝 <b>Тест:</b> {html.escape(test_title)}",
-        f"🎯 <b>Итоговый результат:</b> {score}/{total} ({pct}%)",
-        f"⏱ <b>Время:</b> {minutes} мин. {seconds} сек.\n",
-        "<b>📋 Ответы ученика:</b>"
-    ]
-
-    for idx, a in enumerate(answers, start=1):
-        status_emoji = "✅" if a.get("is_correct") else "❌"
-        q_text = a.get("question", "")
-        q_short = q_text[:45] + ("..." if len(q_text) > 45 else "")
-        user_ans = str(a.get("user_answer", ""))
-        correct_ans = str(a.get("correct_answer", ""))
-
-        breakdown_lines.append(
-            f"\n<b>{idx}. {html.escape(q_short)}</b>\n"
-            f"   Выбор ученика: <code>{html.escape(user_ans)}</code> {status_emoji}\n"
-            f"   Правильный ответ: <code>{html.escape(correct_ans)}</code>"
-        )
-
-    # Безопасное деление на части до 3800 символов (лимит Telegram 4096)
-    chunks = []
-    current_chunk = []
-    curr_len = 0
-    for line in breakdown_lines:
-        line_len = len(line) + 1
-        if curr_len + line_len > 3800 and current_chunk:
-            chunks.append("\n".join(current_chunk))
-            current_chunk = [line]
-            curr_len = line_len
-        else:
-            current_chunk.append(line)
-            curr_len += line_len
-    if current_chunk:
-        chunks.append("\n".join(current_chunk))
+    report_text = (
+        "🔔 <b>Ученик сдал тест!</b>\n\n"
+        f"👤 <b>Ученик:</b> {html.escape(user['full_name'])} ({html.escape(user['class_name'])})\n"
+        f"📝 <b>Тест:</b> {html.escape(test_title)}\n"
+        f"🎯 <b>Итоговый результат:</b> {score}/{total} ({pct}%)\n"
+        f"⏱ <b>Время:</b> {minutes} мин. {seconds} сек."
+    )
 
     for admin_id in ADMIN_IDS:
-        for chunk in chunks:
-            try:
-                await bot.send_message(admin_id, chunk, parse_mode="HTML")
-            except Exception as e:
-                logger.warning("Failed to notify admin %s: %s", admin_id, e)
+        try:
+            await bot.send_message(admin_id, report_text, parse_mode="HTML")
+        except Exception as e:
+            logger.warning("Failed to notify admin %s: %s", admin_id, e)
 
 
 # --- 5. Мои результаты ---
@@ -328,8 +297,21 @@ async def show_student_history(message: types.Message):
 
     lines = ["📈 <b>История ваших тестов:</b>\n"]
     for s in submissions[:20]:
-        date_str = str(s["completed_at"])[:16]
         icon = "🏆" if s.get("test_type") == "olympiad" else "📚"
-        lines.append(f"{icon} <b>{html.escape(s['test_title'])}</b>\n   Статус: <i>Сдано на проверку</i> | {date_str}")
+        status = s.get("status", "pending")
+
+        if status == "confirmed":
+            score = s["score"]
+            total = s["total_questions"]
+            pct = round((score / total) * 100) if total > 0 else 0
+            lines.append(
+                f"{icon} <b>{html.escape(s['test_title'])}</b>\n"
+                f"   Результат: <b>{score}/{total} ({pct}%)</b>"
+            )
+        else:
+            lines.append(
+                f"{icon} <b>{html.escape(s['test_title'])}</b>\n"
+                f"   Статус: <i>Сдано на проверку</i>"
+            )
 
     await message.answer("\n\n".join(lines), parse_mode="HTML")

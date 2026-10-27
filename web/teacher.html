@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Кабинет учителя — Результаты тестов</title>
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+  <link rel="stylesheet" href="/static/teacher.css">
+</head>
+<body>
+  <div id="app">
+    <!-- Header -->
+    <header class="header">
+      <div class="header-left">
+        <button id="back-btn" class="nav-btn hidden">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+            <polyline points="15 18 9 12 15 6"></polyline>
+          </svg>
+          <span>Тесты</span>
+        </button>
+        <div id="header-titles">
+          <h1 id="page-title" class="title">Ведомость учителя</h1>
+          <p id="page-subtitle" class="subtitle">Результаты и проверка работ</p>
+        </div>
+      </div>
+      <div class="header-right">
+        <div id="status-badge" class="badge">Учитель</div>
+      </div>
+    </header>
+
+    <!-- Main Container -->
+    <main id="main-content" class="content">
+      <!-- Loading State -->
+      <div id="loading" class="state-container">
+        <div class="spinner"></div>
+        <p class="state-text">Загружаем данные ведомости...</p>
+      </div>
+
+      <!-- Error Screen -->
+      <div id="error-screen" class="state-container hidden">
+        <div class="state-icon">⚠️</div>
+        <h2 id="error-title" class="state-title">Ошибка</h2>
+        <p id="error-desc" class="state-text"></p>
+        <button id="retry-btn" class="btn-secondary" style="margin-top: 16px;">Попробовать снова</button>
+      </div>
+
+      <!-- VIEW 1: Tests List -->
+      <section id="view-tests" class="view hidden">
+        <div class="section-header">
+          <h2 class="section-title">Список тестов</h2>
+          <span id="tests-count" class="counter">Всего: 0</span>
+        </div>
+        <div id="tests-list" class="cards-list">
+          <!-- Dynamic tests cards -->
+        </div>
+      </section>
+
+      <!-- VIEW 2: Submissions for Selected Test -->
+      <section id="view-submissions" class="view hidden">
+        <!-- Test Summary Card -->
+        <div class="test-banner">
+          <div class="banner-info">
+            <h2 id="active-test-title" class="banner-title">Название теста</h2>
+            <div class="banner-meta">
+              <span id="banner-category" class="meta-tag">Обычный</span>
+              <span id="banner-stats" class="meta-text">0 сданных работ</span>
+            </div>
+          </div>
+          <button id="confirm-all-btn" class="btn-confirm-all hidden">
+            <span>✅ Утвердить все (0)</span>
+          </button>
+        </div>
+
+        <!-- Filter Chips -->
+        <div class="filter-chips">
+          <button class="chip active" data-filter="all">Все (<span id="count-all">0</span>)</button>
+          <button class="chip" data-filter="pending">Ожидают (<span id="count-pending">0</span>)</button>
+          <button class="chip" data-filter="confirmed">Проверены (<span id="count-confirmed">0</span>)</button>
+        </div>
+
+        <!-- Submissions List -->
+        <div id="submissions-list" class="submissions-list">
+          <!-- Dynamic student submissions -->
+        </div>
+      </section>
+    </main>
+
+    <!-- Toast Notification -->
+    <div id="toast" class="toast hidden">
+      <span id="toast-icon">✓</span>
+      <span id="toast-message">Оценка подтверждена!</span>
+    </div>
+  </div>
+
+  <script src="/static/teacher.js"></script>
+</body>
+</html>

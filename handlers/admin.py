@@ -3,9 +3,9 @@ import logging
 from io import BytesIO
 from aiogram import Router, types, F, Bot
 from aiogram.fsm.context import FSMContext
-from aiogram.types import BufferedInputFile
+from aiogram.types import BufferedInputFile, WebAppInfo, InlineKeyboardMarkup, InlineKeyboardButton
 
-from config import ADMIN_IDS
+from config import ADMIN_IDS, WEBAPP_URL
 from database import (
     create_test_with_questions,
     get_tests,
@@ -361,11 +361,39 @@ async def delete_test_handler(callback: types.CallbackQuery):
 async def show_results_overview(message: types.Message):
     tests = await get_tests(only_active=False)
     if not tests:
-        await message.answer("Пока нет тестов для отображения результатов.")
+        await message.answer(
+            "Пока нет созданных тестов. Нажмите <b>«📝 Создать тест»</b>, чтобы добавить первый!",
+            parse_mode="HTML"
+        )
         return
 
-    text = "📊 <b>Выберите тест для скачивания ведомости оценок:</b>"
-    await message.answer(text, reply_markup=get_admin_tests_kb(tests), parse_mode="HTML")
+    teacher_id = message.from_user.id
+    buttons = []
+    if WEBAPP_URL:
+        teacher_url = f"{WEBAPP_URL}/teacher?teacher_id={teacher_id}"
+        buttons.append([
+            InlineKeyboardButton(text="🚀 Открыть ведомость (Mini App)", web_app=WebAppInfo(url=teacher_url))
+        ])
+
+    buttons.append([
+        InlineKeyboardButton(text="📥 Скачать Excel ведомость", callback_data="admin_export_menu")
+    ])
+
+    kb = InlineKeyboardMarkup(inline_keyboard=buttons)
+
+    text = (
+        "📊 <b>Кабинет учителя: Результаты учеников</b>\n\n"
+        "Откройте веб-ведомость прямо внутри Telegram, чтобы посмотреть ответы учеников и утвердить их оценки в 1 клик:"
+    )
+    await message.answer(text, reply_markup=kb, parse_mode="HTML")
+
+
+@router.callback_query(F.data == "admin_export_menu")
+async def show_export_menu(callback: types.CallbackQuery):
+    tests = await get_tests(only_active=False)
+    text = "📊 <b>Выберите тест для скачивания Excel ведомости:</b>"
+    await callback.message.edit_text(text, reply_markup=get_admin_tests_kb(tests), parse_mode="HTML")
+    await callback.answer()
 
 
 @router.callback_query(F.data.startswith("export_test_excel:"))

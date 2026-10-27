@@ -1,10 +1,16 @@
 from typing import List, Dict, Any
-from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo
+from config import WEBAPP_URL
 
 def get_admin_main_kb() -> ReplyKeyboardMarkup:
+    if WEBAPP_URL:
+        results_btn = KeyboardButton(text="📊 Результаты учеников", web_app=WebAppInfo(url=f"{WEBAPP_URL}/teacher"))
+    else:
+        results_btn = KeyboardButton(text="📊 Результаты учеников")
+
     kb = [
         [KeyboardButton(text="📝 Создать тест")],
-        [KeyboardButton(text="📂 Мои тесты"), KeyboardButton(text="📊 Результаты учеников")],
+        [KeyboardButton(text="📂 Мои тесты"), results_btn],
     ]
     return ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True)
 

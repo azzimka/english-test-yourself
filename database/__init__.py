@@ -4,6 +4,7 @@ from .db import (
     register_student,
     create_test_with_questions,
     get_tests,
+    get_tests_with_stats,
     get_test_by_id,
     toggle_test_active,
     delete_test,
@@ -12,4 +13,6 @@ from .db import (
     get_student_submission,
     get_student_submissions,
     get_test_submissions,
+    confirm_submission,
+    confirm_all_test_submissions,
 )

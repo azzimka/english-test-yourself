@@ -62,9 +62,19 @@ async def init_db():
                 total_questions INTEGER NOT NULL,
                 answers_json TEXT,
                 time_spent_seconds INTEGER DEFAULT 0,
-                completed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                status TEXT NOT NULL DEFAULT 'pending',
+                completed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                confirmed_at TIMESTAMP
             );
         """)
+
+        # Migration: ensure status and confirmed_at exist on existing installations
+        async with db.execute("PRAGMA table_info(submissions)") as cursor:
+            existing_cols = [row[1] for row in await cursor.fetchall()]
+            if "status" not in existing_cols:
+                await db.execute("ALTER TABLE submissions ADD COLUMN status TEXT NOT NULL DEFAULT 'pending';")
+            if "confirmed_at" not in existing_cols:
+                await db.execute("ALTER TABLE submissions ADD COLUMN confirmed_at TIMESTAMP;")
         
         await db.commit()
         logger.info("Database initialized successfully at %s", DB_PATH)
@@ -138,6 +148,25 @@ async def get_tests(test_type: Optional[str] = None, only_active: bool = True) -
             query += " AND is_active = 1"
         query += " ORDER BY id DESC"
         async with db.execute(query, params) as cursor:
+            rows = await cursor.fetchall()
+            return [dict(r) for r in rows]
+
+async def get_tests_with_stats() -> List[Dict[str, Any]]:
+    """Returns all tests with submission statistics (total, pending, confirmed)."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        query = """
+            SELECT 
+                t.id, t.title, t.description, t.test_type, t.is_active, t.created_at,
+                COUNT(s.id) as total_submissions,
+                COALESCE(SUM(CASE WHEN s.status = 'pending' THEN 1 ELSE 0 END), 0) as pending_count,
+                COALESCE(SUM(CASE WHEN s.status = 'confirmed' THEN 1 ELSE 0 END), 0) as confirmed_count
+            FROM tests t
+            LEFT JOIN submissions s ON t.id = s.test_id
+            GROUP BY t.id
+            ORDER BY t.id DESC
+        """
+        async with db.execute(query) as cursor:
             rows = await cursor.fetchall()
             return [dict(r) for r in rows]
 
@@ -231,7 +260,49 @@ async def get_test_submissions(test_id: int) -> List[Dict[str, Any]]:
             FROM submissions s
             JOIN users u ON s.student_id = u.id
             WHERE s.test_id = ?
-            ORDER BY s.score DESC, s.completed_at ASC
+            ORDER BY (CASE WHEN s.status = 'pending' THEN 0 ELSE 1 END), s.completed_at DESC
         """, (test_id,)) as cursor:
             rows = await cursor.fetchall()
             return [dict(r) for r in rows]
+
+async def confirm_submission(submission_id: int) -> Optional[Dict[str, Any]]:
+    """Marks a single submission as confirmed and returns updated submission info with student and test details."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        await db.execute("""
+            UPDATE submissions 
+            SET status = 'confirmed', confirmed_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+        """, (submission_id,))
+        await db.commit()
+        
+        async with db.execute("""
+            SELECT s.*, u.full_name, u.class_name, u.telegram_id, t.title as test_title
+            FROM submissions s
+            JOIN users u ON s.student_id = u.id
+            JOIN tests t ON s.test_id = t.id
+            WHERE s.id = ?
+        """, (submission_id,)) as cursor:
+            row = await cursor.fetchone()
+            return dict(row) if row else None
+
+async def confirm_all_test_submissions(test_id: int) -> List[Dict[str, Any]]:
+    """Marks all pending submissions of a test as confirmed and returns list of updated submissions."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute("""
+            SELECT s.id, s.score, s.total_questions, u.telegram_id, u.full_name, t.title as test_title
+            FROM submissions s
+            JOIN users u ON s.student_id = u.id
+            JOIN tests t ON s.test_id = t.id
+            WHERE s.test_id = ? AND s.status = 'pending'
+        """, (test_id,)) as cursor:
+            pending_rows = [dict(r) for r in await cursor.fetchall()]
+
+        await db.execute("""
+            UPDATE submissions 
+            SET status = 'confirmed', confirmed_at = CURRENT_TIMESTAMP
+            WHERE test_id = ? AND status = 'pending'
+        """, (test_id,))
+        await db.commit()
+        return pending_rows
