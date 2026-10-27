@@ -66,13 +66,43 @@ async def parse_test_content(
     test_type: str = "regular"
 ) -> ParsedTest:
     """
-    Parses test content using Groq API (llama-3.3-70b-versatile) with automatic fallback.
+    Parses test content using Gemini API (with Groq API as fallback).
     Takes extracted text from PDF, Word (.docx), or plain text.
     """
     if not text_content or not text_content.strip():
         raise ValueError("Содержимое теста пусто или не удалось извлечь текст.")
 
-    # Primary: Groq API
+    # Primary: Gemini API
+    if GEMINI_API_KEY:
+        try:
+            from google import genai
+            from google.genai import types
+            logger.info("Attempting test parsing with Gemini model: %s", GEMINI_MODEL)
+            gemini_client = genai.Client(api_key=GEMINI_API_KEY)
+            contents = [
+                f"Тип теста: {test_type}. {PROMPT_SYSTEM}",
+                f"Материалы теста:\n\n{text_content}"
+            ]
+            response = await gemini_client.aio.models.generate_content(
+                model=GEMINI_MODEL,
+                contents=contents,
+                config=types.GenerateContentConfig(
+                    response_mime_type="application/json",
+                    response_schema=ParsedTest,
+                    temperature=0.2,
+                )
+            )
+            if response.parsed:
+                logger.info("Successfully parsed test with Gemini (%s questions)", len(response.parsed.questions))
+                return response.parsed
+            data = json.loads(response.text)
+            parsed = ParsedTest(**data)
+            logger.info("Successfully parsed test with Gemini (%s questions)", len(parsed.questions))
+            return parsed
+        except Exception as e:
+            logger.warning("Gemini API failed: %s. Falling back to Groq...", e)
+
+    # Fallback: Groq API
     if GROQ_API_KEY:
         client = get_groq_client()
         models_to_try = [
@@ -117,28 +147,4 @@ async def parse_test_content(
         logger.error("All Groq models failed. Last error: %s", last_error)
         raise RuntimeError(f"Не удалось распарсить тест через Groq API: {last_error}")
 
-    # Fallback to Gemini if GROQ_API_KEY is not set yet
-    elif GEMINI_API_KEY:
-        from google import genai
-        from google.genai import types
-        logger.info("GROQ_API_KEY not set in .env, falling back to Gemini API...")
-        gemini_client = genai.Client(api_key=GEMINI_API_KEY)
-        contents = [
-            f"Тип теста: {test_type}. {PROMPT_SYSTEM}",
-            f"Материалы теста:\n\n{text_content}"
-        ]
-        response = await gemini_client.aio.models.generate_content(
-            model=GEMINI_MODEL,
-            contents=contents,
-            config=types.GenerateContentConfig(
-                response_mime_type="application/json",
-                response_schema=ParsedTest,
-                temperature=0.2,
-            )
-        )
-        if response.parsed:
-            return response.parsed
-        data = json.loads(response.text)
-        return ParsedTest(**data)
-    else:
-        raise ValueError("Ни GROQ_API_KEY, ни GEMINI_API_KEY не заданы в .env!")
+    raise ValueError("Ни GEMINI_API_KEY, ни GROQ_API_KEY не заданы в .env!")
