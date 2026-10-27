@@ -352,7 +352,7 @@ async def confirm_publish_test(callback: types.CallbackQuery, state: FSMContext)
 
     type_name = "Олимпиадные тесты" if test_type == "olympiad" else "Обычные тесты"
     await callback.message.edit_text(
-        f"🎉 <b>Тест опубликован!</b> (ID: {test_id})\n\n"
+        f"🎉 <b>Тест опубликован!</b>\n\n"
         f"Ученики уже могут найти его в разделе <b>«{html.escape(type_name)}»</b> и приступить к решению.",
         parse_mode="HTML"
     )
