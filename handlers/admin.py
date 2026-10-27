@@ -3,6 +3,7 @@ import logging
 import asyncio
 from io import BytesIO
 from aiogram import Router, types, F, Bot
+from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.enums import ChatAction
 from aiogram.exceptions import TelegramBadRequest, TelegramRetryAfter
@@ -93,6 +94,7 @@ async def animate_loading_status(status_msg: types.Message, bot: Bot, stop_event
 
 
 # --- 1. Меню "Создать тест" ---
+@router.message(Command("create_test"))
 @router.message(F.text == "📝 Создать тест")
 @router.callback_query(F.data == "nav_create_test")
 async def start_create_test(event: types.Message | types.CallbackQuery, state: FSMContext):
@@ -358,6 +360,7 @@ async def confirm_publish_test(callback: types.CallbackQuery, state: FSMContext)
 
 
 # --- 4. Меню "Мои тесты" ---
+@router.message(Command("my_tests"))
 @router.message(F.text == "📂 Мои тесты")
 @router.callback_query(F.data == "admin_tests_list")
 async def list_admin_tests(event: types.Message | types.CallbackQuery):
@@ -418,6 +421,7 @@ async def delete_test_handler(callback: types.CallbackQuery):
 
 
 # --- 5. Меню "Результаты" ---
+@router.message(Command("results"))
 @router.message(F.text.in_({"📊 Результаты", "📊 Результаты учеников"}))
 async def show_results_overview(message: types.Message):
     tests = await get_tests(only_active=False)
@@ -443,4 +447,3 @@ async def show_results_overview(message: types.Message):
         "Откройте веб-ведомость прямо внутри Telegram, чтобы посмотреть ответы учеников и утвердить их оценки в 1 клик:"
     )
     await message.answer(text, reply_markup=kb, parse_mode="HTML")
-    await callback.answer()

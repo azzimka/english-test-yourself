@@ -2,9 +2,9 @@ import asyncio
 import logging
 from aiohttp import web
 from aiogram import Bot, Dispatcher
-from aiogram.types import BotCommand, BotCommandScopeDefault
+from aiogram.types import BotCommand, BotCommandScopeDefault, BotCommandScopeChat
 
-from config import BOT_TOKEN, WEB_PORT, WEB_HOST, WEBAPP_URL
+from config import BOT_TOKEN, WEB_PORT, WEB_HOST, WEBAPP_URL, ADMIN_IDS
 from database import init_db
 from handlers import admin_router, common_router, student_router
 from services.web_server import create_web_app
@@ -17,15 +17,27 @@ logger = logging.getLogger(__name__)
 
 async def setup_bot_ui(bot: Bot):
     """Configures bot commands menu and welcome description for first-time users."""
-    commands = [
+    student_commands = [
         BotCommand(command="start", description="🚀 Главное меню"),
-        BotCommand(command="id", description="🆔 Узнать свой Telegram ID"),
     ]
     try:
-        await bot.set_my_commands(commands, scope=BotCommandScopeDefault())
-        logger.info("Bot commands menu configured successfully.")
+        await bot.set_my_commands(student_commands, scope=BotCommandScopeDefault())
+        logger.info("Default bot commands menu configured successfully.")
     except Exception as e:
-        logger.warning("Could not set bot commands: %s", e)
+        logger.warning("Could not set default bot commands: %s", e)
+
+    admin_commands = [
+        BotCommand(command="start", description="🚀 Главное меню"),
+        BotCommand(command="create_test", description="📝 Создать тест"),
+        BotCommand(command="my_tests", description="📂 Мои тесты"),
+        BotCommand(command="results", description="📊 Результаты"),
+    ]
+    for admin_id in ADMIN_IDS:
+        try:
+            await bot.set_my_commands(admin_commands, scope=BotCommandScopeChat(chat_id=admin_id))
+            logger.info("Admin commands configured for %s", admin_id)
+        except Exception as e:
+            logger.debug("Could not set admin commands for %s: %s", admin_id, e)
 
     desc = (
         "🇬🇧 English Lab\n\n"
