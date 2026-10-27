@@ -67,7 +67,7 @@ async def cmd_start(event: types.Message | types.CallbackQuery, state: FSMContex
         first_name = html.escape(event.from_user.first_name or "Учитель")
         text = (
             f"👩‍🏫 <b>Здравствуйте, {first_name}!</b>\n\n"
-            "Добро пожаловать в панель управления <b>English Test Yourself</b>.\n\n"
+            "Добро пожаловать в панель управления <b>English Lab</b>.\n\n"
             "Выберите нужное действие кнопками ниже:"
         )
 
@@ -121,7 +121,7 @@ async def cmd_start(event: types.Message | types.CallbackQuery, state: FSMContex
     else:
         # Новый ученик — подробный онбординг
         text = (
-            "👋 <b>Добро пожаловать в English Test Yourself!</b>\n\n"
+            "👋 <b>Добро пожаловать в English Lab!</b>\n\n"
             "Этот бот создан для удобного прохождения школьных тестов и олимпиад по английскому языку прямо внутри Telegram.\n\n"
             "🚀 <b>Для начала давайте познакомимся:</b>\n"
             "Чтобы учительница видела ваши результаты и выставляла оценки, представьтесь один раз.\n\n"
