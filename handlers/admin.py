@@ -204,7 +204,19 @@ async def render_test_preview(message: types.Message, parsed_dict: dict, test_ty
     await state.set_state(UploadTestStates.waiting_for_confirmation)
 
 
-# --- 2.1 Изменение названия теста перед публикацией ---
+# --- 2.3 Обработка случайной отправки файла вне сценария создания теста ---
+@router.message(F.document | F.photo)
+async def handle_unexpected_file_upload(message: types.Message, state: FSMContext):
+    current_state = await state.get_state()
+    if current_state == UploadTestStates.waiting_for_content:
+        return
+
+    await message.answer(
+        "📄 <b>Я вижу ваш файл!</b>\n\n"
+        "Чтобы загрузить его в базу, нажмите кнопку <b>«📝 Создать тест»</b> в меню внизу, "
+        "выберите категорию и отправьте файл повторно.",
+        parse_mode="HTML"
+    )
 @router.callback_query(F.data == "edit_title_btn", UploadTestStates.waiting_for_confirmation)
 async def start_editing_title(callback: types.CallbackQuery, state: FSMContext):
     await callback.message.reply("✍️ Напишите новое название для этого теста сообщением:")
