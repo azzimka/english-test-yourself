@@ -66,7 +66,7 @@ CHUNK_PROMPT = """You are an expert English exam parser.
 Your task is to parse a SPECIFIC BATCH of questions from an English test into JSON format.
 
 CRITICAL RULES:
-1. Parse EVERY SINGLE question present in this batch without omitting or summarizing any.
+1. Parse EVERY SINGLE question present in this batch without omitting or summarizing any. Do NOT include examples (such as Example (0) or items where the answer is already filled in as a demonstration).
 2. If multiple-choice options (A, B, C, D) exist, put them into `options` (formatted as 'A) ...', 'B) ...', etc.).
 3. If it is an open cloze / word formation task (fill in the blank without multiple choice), leave `options` as an empty list [].
 4. If an Answer Key is provided below, use it to accurately fill `correct_answer`.
@@ -105,7 +105,7 @@ GROQ_FALLBACK_MODELS = [
 
 # Regex patterns
 QUESTION_START_PATTERN = re.compile(
-    r"(?:^|\n)\s*(\d+)\s*[.)]\s",
+    r"(?:^|\n)\s*(\d+)\s*(?:[.):\-]\s*|\s+(?=[A-ZА-ЯЁ]))",
     re.MULTILINE
 )
 
@@ -165,6 +165,9 @@ def _find_question_positions(text: str) -> List[Tuple[int, int]]:
     positions = []
     for match in QUESTION_START_PATTERN.finditer(text):
         q_num = int(match.group(1))
+        # Skip example question 0 if present
+        if q_num == 0:
+            continue
         pos = match.start()
         # Adjust position to start of line (skip leading newline from pattern)
         if text[pos] == '\n':

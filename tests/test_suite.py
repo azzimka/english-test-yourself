@@ -1116,3 +1116,19 @@ async def test_76_update_test_title():
     assert t_after["title"] == "New Brand Name"
 
 
+# --- 77: question numbering without dot (space only) and skipping Example 0 ---
+def test_77_question_numbers_space_only_and_skip_zero():
+    from services.ai_parser import count_questions_in_text, split_test_into_chunks
+
+    text = (
+        "Complete the test. Example (0) is done.\n"
+        "0 Emily: Where are you going? A) home B) work\n"
+        "1 Manager: Where is David? A) in B) on\n"
+        "2 Amirah: Do you like cats? A) yes B) no\n"
+        "3 Andrew: Where is Alicia? A) US B) UK\n"
+    )
+    cnt = count_questions_in_text(text)
+    assert cnt == 3, f"Expected 3 questions (1, 2, 3), but detected {cnt}"
+
+
+
