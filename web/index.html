@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Тестирование по английскому языку</title>
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <div id="app">
+    <!-- Header -->
+    <header class="header">
+      <div class="header-content">
+        <h1 id="test-title" class="title">Загрузка теста...</h1>
+        <div id="student-badge" class="badge"></div>
+      </div>
+      <div class="progress-bar-container">
+        <div id="progress-bar" class="progress-bar"></div>
+      </div>
+    </header>
+
+    <!-- Main Content -->
+    <main id="main-content" class="content">
+      <div id="loading" class="state-container">
+        <div class="spinner"></div>
+        <p class="state-text">Загружаем вопросы...</p>
+      </div>
+
+      <div id="error-screen" class="state-container hidden">
+        <div class="state-icon">⚠️</div>
+        <h2 id="error-title" class="state-title">Ошибка</h2>
+        <p id="error-desc" class="state-text"></p>
+      </div>
+
+      <div id="quiz-container" class="questions-list hidden">
+        <!-- Dynamically rendered questions -->
+      </div>
+    </main>
+
+    <!-- Sticky Footer -->
+    <footer id="footer" class="footer hidden">
+      <div class="footer-info">
+        <span id="answered-counter" class="counter">Отвечено: 0 из 0</span>
+      </div>
+      <button id="submit-btn" class="btn-primary" disabled>Отправить работу</button>
+    </footer>
+
+    <!-- Confirmation Modal -->
+    <div id="confirm-modal" class="modal-overlay hidden">
+      <div class="modal-card">
+        <h3 class="modal-title">Отправить работу?</h3>
+        <p id="modal-desc" class="modal-text">Вы уверены, что хотите завершить тест? После отправки изменить ответы будет нельзя.</p>
+        <div class="modal-actions">
+          <button id="modal-cancel-btn" class="btn-secondary">Вернуться</button>
+          <button id="modal-confirm-btn" class="btn-primary">Да, отправить</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Success Screen -->
+    <div id="success-screen" class="success-screen hidden">
+      <div class="success-card">
+        <div class="success-icon">
+          <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+            <polyline points="20 6 9 17 4 12"></polyline>
+          </svg>
+        </div>
+        <h2 class="success-title">Работа принята!</h2>
+        <p class="success-desc">Ваши ответы успешно отправлены учителю на проверку.<br>Результаты будут объявлены на уроке.</p>
+        <button id="close-btn" class="btn-primary">Закрыть</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

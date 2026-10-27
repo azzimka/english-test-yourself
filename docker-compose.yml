@@ -1,0 +1,11 @@
+services:
+  bot:
+    build: .
+    container_name: english_test_bot
+    restart: always
+    env_file:
+      - .env
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./data:/app/data
