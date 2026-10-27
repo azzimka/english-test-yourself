@@ -656,3 +656,30 @@ def test_54_excel_export_generation():
     ws = wb.active
     assert "Результаты" in ws.title
     assert "Петров Петр" in ws["B4"].value or "Петров Петр" in str(ws.cell(row=4, column=2).value)
+
+
+@pytest.mark.asyncio
+async def test_55_animate_loading_status():
+    from unittest.mock import AsyncMock, MagicMock
+    from handlers.admin import animate_loading_status, LOADING_STEPS
+
+    mock_msg = MagicMock()
+    mock_msg.chat = MagicMock()
+    mock_msg.chat.id = 12345
+    mock_msg.edit_text = AsyncMock()
+
+    mock_bot = MagicMock()
+    mock_bot.send_chat_action = AsyncMock()
+
+    stop_event = asyncio.Event()
+
+    task = asyncio.create_task(animate_loading_status(mock_msg, mock_bot, stop_event))
+    await asyncio.sleep(0.05)
+    stop_event.set()
+    await task
+
+    assert mock_bot.send_chat_action.called
+    assert len(LOADING_STEPS) >= 5
+    for step in LOADING_STEPS:
+        assert "<b>" in step and "</b>" in step
+

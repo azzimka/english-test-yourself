@@ -1,8 +1,11 @@
 import html
 import logging
+import asyncio
 from io import BytesIO
 from aiogram import Router, types, F, Bot
 from aiogram.fsm.context import FSMContext
+from aiogram.enums import ChatAction
+from aiogram.exceptions import TelegramBadRequest, TelegramRetryAfter
 from aiogram.types import BufferedInputFile, WebAppInfo, InlineKeyboardMarkup, InlineKeyboardButton
 
 from config import ADMIN_IDS, WEBAPP_URL
@@ -39,6 +42,56 @@ router = Router()
 # Фильтр: только для администраторов из ADMIN_IDS
 router.message.filter(F.from_user.id.in_(ADMIN_IDS))
 router.callback_query.filter(F.from_user.id.in_(ADMIN_IDS))
+
+
+LOADING_STEPS = [
+    "📖 <b>Читаю и изучаю ваш документ...</b>",
+    "🔍 <b>Нахожу все задания и варианты ответов...</b>",
+    "🧠 <b>Разбираю грамматику и проверяю правильные ключи...</b>",
+    "✍️ <b>Формирую интерактивный тест для учеников...</b>",
+    "✨ <b>Почти готово, навожу финальный лоск...</b>",
+    "🚀 <b>Финальная проверка структуры заданий...</b>",
+    "⏳ <b>Завершаю обработку и открываю предпросмотр...</b>",
+]
+
+
+async def animate_loading_status(status_msg: types.Message, bot: Bot, stop_event: asyncio.Event):
+    """
+    Динамически обновляет статус в Telegram каждые ~2.2 секунды,
+    пока идет обработка теста, создавая живой и дружелюбный отклик.
+    """
+    idx = 0
+    try:
+        await bot.send_chat_action(chat_id=status_msg.chat.id, action=ChatAction.TYPING)
+    except Exception:
+        pass
+
+    while not stop_event.is_set():
+        try:
+            await asyncio.wait_for(stop_event.wait(), timeout=2.2)
+            break
+        except asyncio.TimeoutError:
+            pass
+
+        if stop_event.is_set():
+            break
+
+        idx = (idx + 1) % len(LOADING_STEPS)
+        new_text = LOADING_STEPS[idx]
+        try:
+            await status_msg.edit_text(new_text, parse_mode="HTML")
+            await bot.send_chat_action(chat_id=status_msg.chat.id, action=ChatAction.TYPING)
+        except TelegramRetryAfter as e:
+            try:
+                await asyncio.wait_for(stop_event.wait(), timeout=e.retry_after)
+                break
+            except asyncio.TimeoutError:
+                pass
+        except TelegramBadRequest as e:
+            if "message is not modified" not in str(e).lower():
+                logger.debug("TelegramBadRequest in animate_loading_status: %s", e)
+        except Exception as e:
+            logger.debug("Exception in animate_loading_status: %s", e)
 
 
 # --- 1. Меню "Создать тест" ---
@@ -118,7 +171,7 @@ async def ask_for_test_content(message: types.Message, state: FSMContext, is_edi
 async def process_photo_rejected(message: types.Message):
     await message.answer(
         "📷 <b>Анализ фотографий не поддерживается</b>\n\n"
-        "Нейросеть Groq работает с электронными документами. Пожалуйста, отправьте файл в формате:\n"
+        "Бот работает с электронными документами. Пожалуйста, отправьте файл в формате:\n"
         "• <b>PDF (.pdf)</b>\n"
         "• <b>Word (.docx)</b>\n"
         "• <b>Текстовый файл (.txt)</b>\n"
@@ -131,62 +184,76 @@ async def process_photo_rejected(message: types.Message):
 async def process_test_upload(message: types.Message, state: FSMContext, bot: Bot):
     data = await state.get_data()
     test_type = data.get("test_type", "regular")
-    status_msg = await message.answer(
-        "⏳ <b>Нейросеть (Groq) анализирует материалы...</b>\nОбычно это занимает 1–3 секунды.",
-        parse_mode="HTML"
-    )
 
     text_content = None
+    if message.text:
+        text_content = message.text.strip()
+        if len(text_content) < 10:
+            await message.answer(
+                "❌ Текст задания слишком короткий. Пожалуйста, отправьте полные материалы теста или документ.",
+                parse_mode="HTML"
+            )
+            return
+    elif message.document:
+        file_name = message.document.file_name or ""
+        file_io = BytesIO()
+        await bot.download(message.document, destination=file_io)
+        file_bytes = file_io.getvalue()
+
+        try:
+            text_content = extract_text_from_file(file_name, file_bytes)
+        except (UnsupportedFileError, FileExtractionError) as file_err:
+            await message.answer(str(file_err), parse_mode="HTML")
+            return
+
+    # Запускаем живую динамическую анимацию статуса
+    status_msg = await message.answer(
+        LOADING_STEPS[0],
+        parse_mode="HTML"
+    )
+    stop_event = asyncio.Event()
+    anim_task = asyncio.create_task(animate_loading_status(status_msg, bot, stop_event))
 
     try:
-        if message.text:
-            text_content = message.text.strip()
-            if len(text_content) < 10:
-                await status_msg.edit_text(
-                    "❌ Текст задания слишком короткий. Пожалуйста, отправьте полные материалы теста или документ.",
-                    parse_mode="HTML"
-                )
-                return
-        elif message.document:
-            file_name = message.document.file_name or ""
-            file_io = BytesIO()
-            await bot.download(message.document, destination=file_io)
-            file_bytes = file_io.getvalue()
-
-            try:
-                text_content = extract_text_from_file(file_name, file_bytes)
-            except (UnsupportedFileError, FileExtractionError) as file_err:
-                await status_msg.edit_text(str(file_err), parse_mode="HTML")
-                return
-
-        # Запрос к нейросети Groq
+        # Запрос к нейросети
         parsed_test: ParsedTest = await parse_test_content(
             text_content=text_content,
             test_type=test_type
         )
-
-        if not parsed_test.questions:
-            await status_msg.edit_text(
-                "⚠️ Не удалось обнаружить вопросы в предоставленных материалах. Проверьте файл и попробуйте снова.",
-                parse_mode="HTML"
-            )
-            return
-
-        # Если учитель заранее указал название, сохраняем его
-        custom_title = data.get("custom_title")
-        if custom_title:
-            parsed_test.title = custom_title
-
-        # Сохраняем в FSM для подтверждения
-        await state.update_data(parsed_test=parsed_test.model_dump())
-        await render_test_preview(status_msg, parsed_test.model_dump(), test_type, state)
-
     except Exception as e:
         logger.exception("Error processing uploaded test")
+        stop_event.set()
+        try:
+            await anim_task
+        except Exception:
+            pass
         await status_msg.edit_text(
             f"❌ <b>Произошла ошибка при обработке теста:</b>\n<code>{html.escape(str(e))}</code>",
             parse_mode="HTML"
         )
+        return
+    finally:
+        stop_event.set()
+        try:
+            await anim_task
+        except Exception:
+            pass
+
+    if not parsed_test or not parsed_test.questions:
+        await status_msg.edit_text(
+            "⚠️ Не удалось обнаружить вопросы в предоставленных материалах. Проверьте файл и попробуйте снова.",
+            parse_mode="HTML"
+        )
+        return
+
+    # Если учитель заранее указал название, сохраняем его
+    custom_title = data.get("custom_title")
+    if custom_title:
+        parsed_test.title = custom_title
+
+    # Сохраняем в FSM для подтверждения
+    await state.update_data(parsed_test=parsed_test.model_dump())
+    await render_test_preview(status_msg, parsed_test.model_dump(), test_type, state)
 
 
 # Если прислан другой тип медиа (голос, видео, стикер)
