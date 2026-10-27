@@ -5,6 +5,11 @@ on:
     branches:
       - main
 
+# Prevent overlapping deploy jobs on Oracle VPS
+concurrency:
+  group: production_deploy
+  cancel-in-progress: false
+
 jobs:
   deploy:
     runs-on: ubuntu-latest
@@ -19,4 +24,4 @@ jobs:
             cd /home/ubuntu/english_bot
             git fetch origin main
             git reset --hard origin/main
-            docker compose up -d --build
+            docker compose up -d --build --remove-orphans
