@@ -56,25 +56,16 @@
 
       <!-- VIEW 2: Submissions for Selected Test -->
       <section id="view-submissions" class="view hidden">
-        <!-- Test Summary Card -->
-        <div class="test-banner">
-          <div class="banner-info">
-            <h2 id="active-test-title" class="banner-title">Название теста</h2>
-            <div class="banner-meta">
-              <span id="banner-category" class="meta-tag">Обычный</span>
-              <span id="banner-stats" class="meta-text">0 сданных работ</span>
-            </div>
+        <!-- Controls: Filters + Bulk Confirm -->
+        <div class="submissions-controls">
+          <div class="filter-chips">
+            <button class="chip active" data-filter="all">Все (<span id="count-all">0</span>)</button>
+            <button class="chip" data-filter="pending">Ожидают (<span id="count-pending">0</span>)</button>
+            <button class="chip" data-filter="confirmed">Проверены (<span id="count-confirmed">0</span>)</button>
           </div>
           <button id="confirm-all-btn" class="btn-confirm-all hidden">
             <span>✅ Утвердить все (0)</span>
           </button>
-        </div>
-
-        <!-- Filter Chips -->
-        <div class="filter-chips">
-          <button class="chip active" data-filter="all">Все (<span id="count-all">0</span>)</button>
-          <button class="chip" data-filter="pending">Ожидают (<span id="count-pending">0</span>)</button>
-          <button class="chip" data-filter="confirmed">Проверены (<span id="count-confirmed">0</span>)</button>
         </div>
 
         <!-- Submissions List -->

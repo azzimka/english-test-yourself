@@ -243,14 +243,16 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   function updateCountsAndBanner() {
-    elActiveTestTitle.textContent = currentTest.title;
-    elBannerCategory.textContent = currentTest.test_type === "olympiad" ? "🏆 Олимпиадный" : "📚 Обычный";
+    if (elActiveTestTitle && currentTest) elActiveTestTitle.textContent = currentTest.title;
+    if (elBannerCategory && currentTest) {
+      elBannerCategory.textContent = currentTest.test_type === "olympiad" ? "🏆 Олимпиадный" : "📚 Обычный";
+    }
 
     const total = currentSubmissions.length;
     const pending = currentSubmissions.filter((s) => s.status === "pending").length;
     const confirmed = currentSubmissions.filter((s) => s.status === "confirmed").length;
 
-    elBannerStats.textContent = `${total} сданных работ`;
+    if (elBannerStats) elBannerStats.textContent = `${total} сданных работ`;
     elCountAll.textContent = total;
     elCountPending.textContent = pending;
     elCountConfirmed.textContent = confirmed;
@@ -434,7 +436,8 @@ document.addEventListener("DOMContentLoaded", () => {
   function showSubmissionsView() {
     elBackBtn.classList.remove("hidden");
     elPageTitle.textContent = currentTest.title;
-    elPageSubtitle.textContent = "Проверка сданных работ";
+    const typeLabel = currentTest.test_type === "olympiad" ? "🏆 Олимпиадный тест" : "📚 Обычный тест";
+    elPageSubtitle.textContent = `${typeLabel} • Проверка сданных работ`;
 
     elLoading.classList.add("hidden");
     elErrorScreen.classList.add("hidden");

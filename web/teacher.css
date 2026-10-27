@@ -255,43 +255,13 @@ body {
 }
 
 /* Submissions View */
-.test-banner {
-  background: var(--bg-secondary);
-  border: 1px solid var(--border-light);
-  border-radius: var(--radius-md);
-  padding: 18px;
-  margin-bottom: 16px;
+.submissions-controls {
   display: flex;
   justify-content: space-between;
   align-items: center;
   gap: 12px;
-}
-
-.banner-title {
-  font-size: 18px;
-  font-weight: 700;
-  margin-bottom: 4px;
-  line-height: 1.25;
-}
-
-.banner-meta {
-  display: flex;
-  gap: 8px;
-  align-items: center;
-}
-
-.meta-tag {
-  font-size: 12px;
-  font-weight: 600;
-  background: var(--white);
-  padding: 2px 8px;
-  border-radius: 4px;
-  border: 1px solid var(--border-light);
-}
-
-.meta-text {
-  font-size: 13px;
-  color: var(--text-secondary);
+  margin-bottom: 16px;
+  flex-wrap: wrap;
 }
 
 .btn-confirm-all {
@@ -299,7 +269,7 @@ body {
   color: var(--white);
   border: none;
   border-radius: var(--radius-sm);
-  padding: 10px 14px;
+  padding: 8px 14px;
   font-size: 13px;
   font-weight: 600;
   cursor: pointer;
@@ -315,9 +285,8 @@ body {
 .filter-chips {
   display: flex;
   gap: 8px;
-  margin-bottom: 16px;
   overflow-x: auto;
-  padding-bottom: 4px;
+  padding-bottom: 2px;
 }
 
 .chip {
