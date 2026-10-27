@@ -187,6 +187,12 @@ async def toggle_test_active(test_id: int) -> bool:
             row = await cursor.fetchone()
             return bool(row[0]) if row else False
 
+async def update_test_title(test_id: int, new_title: str) -> bool:
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("UPDATE tests SET title = ? WHERE id = ?", (new_title.strip(), test_id))
+        await db.commit()
+        return True
+
 async def delete_test(test_id: int):
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute("PRAGMA foreign_keys = ON;")

@@ -14,6 +14,7 @@ from database import (
     create_test_with_questions,
     get_tests,
     get_test_by_id,
+    update_test_title,
     delete_test,
     get_test_questions,
     get_test_submissions,
@@ -37,6 +38,7 @@ from keyboards.admin_kb import (
     get_confirm_test_kb,
     get_admin_tests_kb,
     get_admin_test_actions_kb,
+    get_cancel_rename_kb,
 )
 from states.admin_states import UploadTestStates
 
@@ -418,7 +420,8 @@ async def list_admin_tests(event: types.Message | types.CallbackQuery):
 
 
 @router.callback_query(F.data.startswith("manage_test:"))
-async def manage_single_test(callback: types.CallbackQuery):
+async def manage_single_test(callback: types.CallbackQuery, state: FSMContext):
+    await state.clear()
     test_id = int(callback.data.split(":")[1])
     test = await get_test_by_id(test_id)
     if not test:
@@ -444,6 +447,64 @@ async def manage_single_test(callback: types.CallbackQuery):
         parse_mode="HTML"
     )
     await callback.answer()
+
+
+@router.callback_query(F.data.startswith("rename_test:"))
+async def start_renaming_test(callback: types.CallbackQuery, state: FSMContext):
+    test_id = int(callback.data.split(":")[1])
+    test = await get_test_by_id(test_id)
+    if not test:
+        await callback.answer("Тест не найден", show_alert=True)
+        return
+
+    await state.update_data(renaming_test_id=test_id)
+    await state.set_state(UploadTestStates.renaming_existing_test)
+
+    text = (
+        f"✏️ <b>Переименование теста</b>\n\n"
+        f"Текущее название: <i>«{html.escape(test['title'])}»</i>\n\n"
+        f"Отправьте новое название сообщением в чат:"
+    )
+    await callback.message.edit_text(
+        text,
+        reply_markup=get_cancel_rename_kb(test_id),
+        parse_mode="HTML"
+    )
+    await callback.answer()
+
+
+@router.message(UploadTestStates.renaming_existing_test, F.text, ~F.text.startswith("/"))
+async def process_rename_test(message: types.Message, state: FSMContext):
+    new_title = message.text.strip()
+    data = await state.get_data()
+    test_id = data.get("renaming_test_id")
+    await state.clear()
+
+    if not test_id:
+        await message.answer("❌ Ошибка: тест не выбран.", parse_mode="HTML")
+        return
+
+    await update_test_title(test_id, new_title)
+    test = await get_test_by_id(test_id)
+    questions = await get_test_questions(test_id)
+    submissions = await get_test_submissions(test_id)
+
+    type_str = "Олимпиадный" if test and test["test_type"] == "olympiad" else "Обычный"
+
+    text = (
+        f"✅ <b>Название теста успешно обновлено!</b>\n\n"
+        f"📋 <b>Управление тестом:</b>\n\n"
+        f"📌 <b>Название:</b> {html.escape(new_title)}\n"
+        f"🏷 <b>Тип:</b> {html.escape(type_str)}\n"
+        f"📊 <b>Вопросов:</b> {len(questions)}\n"
+        f"👥 <b>Сдали учеников:</b> {len(submissions)}"
+    )
+
+    await message.answer(
+        text,
+        reply_markup=get_admin_test_actions_kb(test_id),
+        parse_mode="HTML"
+    )
 
 
 @router.callback_query(F.data.startswith("delete_test:"))

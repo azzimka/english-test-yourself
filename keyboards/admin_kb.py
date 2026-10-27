@@ -63,7 +63,14 @@ def get_admin_tests_kb(tests: List[Dict[str, Any]]) -> InlineKeyboardMarkup:
 
 def get_admin_test_actions_kb(test_id: int) -> InlineKeyboardMarkup:
     kb = [
+        [InlineKeyboardButton(text="✏️ Переименовать", callback_data=f"rename_test:{test_id}")],
         [InlineKeyboardButton(text="🗑 Удалить тест", callback_data=f"delete_test:{test_id}")],
         [InlineKeyboardButton(text="⬅️ Назад ко всем тестам", callback_data="admin_tests_list")]
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=kb)
+
+def get_cancel_rename_kb(test_id: int) -> InlineKeyboardMarkup:
+    kb = [
+        [InlineKeyboardButton(text="❌ Отмена", callback_data=f"manage_test:{test_id}")]
     ]
     return InlineKeyboardMarkup(inline_keyboard=kb)

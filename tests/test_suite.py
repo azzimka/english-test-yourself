@@ -1092,3 +1092,27 @@ async def test_75_log_test_published():
     assert "35" in call_kwargs["text"]
     assert "Anna Teacher" in call_kwargs["text"]
 
+
+# --- 76: update_test_title DB function ---
+@pytest.mark.asyncio
+async def test_76_update_test_title():
+    from database import create_test_with_questions, update_test_title, get_test_by_id
+
+    test_id = await create_test_with_questions(
+        title="Old Name For Test",
+        test_type="regular",
+        created_by=999001,
+        questions=[{"question_text": "Q1?", "options": ["A) 1", "B) 2"], "correct_answer": "A) 1"}],
+        description="test desc"
+    )
+
+    t_before = await get_test_by_id(test_id)
+    assert t_before["title"] == "Old Name For Test"
+
+    res = await update_test_title(test_id, "New Brand Name")
+    assert res is True
+
+    t_after = await get_test_by_id(test_id)
+    assert t_after["title"] == "New Brand Name"
+
+

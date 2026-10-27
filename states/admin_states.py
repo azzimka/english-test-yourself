@@ -6,3 +6,4 @@ class UploadTestStates(StatesGroup):
     waiting_for_content = State()
     waiting_for_confirmation = State()
     editing_title = State()
+    renaming_existing_test = State()

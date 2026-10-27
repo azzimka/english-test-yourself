@@ -7,6 +7,7 @@ from .db import (
     get_tests_with_stats,
     get_test_by_id,
     toggle_test_active,
+    update_test_title,
     delete_test,
     get_test_questions,
     save_submission,
