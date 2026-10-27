@@ -88,7 +88,7 @@ async def cmd_start(event: types.Message | types.CallbackQuery, state: FSMContex
         await message.answer(text, reply_markup=inline_kb, parse_mode="HTML")
         await message.answer(
             "👇 <i>Кнопки управления также закреплены в меню внизу:</i>",
-            reply_markup=get_admin_main_kb(),
+            reply_markup=get_admin_main_kb(teacher_id=user_id),
             parse_mode="HTML"
         )
         return

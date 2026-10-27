@@ -8,9 +8,36 @@ document.addEventListener("DOMContentLoaded", () => {
     if (tg.setBackgroundColor) tg.setBackgroundColor("#FFFFFF");
   }
 
-  // Parse URL search params & Telegram user ID
+  // Parse URL search params & Telegram user ID with multi-layer fallback
   const urlParams = new URLSearchParams(window.location.search);
-  const teacherId = urlParams.get("teacher_id") || (tg?.initDataUnsafe?.user?.id ? String(tg.initDataUnsafe.user.id) : null);
+  let teacherId = urlParams.get("teacher_id") || (tg?.initDataUnsafe?.user?.id ? String(tg.initDataUnsafe.user.id) : null);
+
+  // Fallback 1: Extract user ID from raw tg.initData if initDataUnsafe was omitted
+  if (!teacherId && tg?.initData) {
+    try {
+      const q = new URLSearchParams(tg.initData);
+      const uStr = q.get("user");
+      if (uStr) {
+        const uObj = JSON.parse(uStr);
+        if (uObj?.id) teacherId = String(uObj.id);
+      }
+    } catch (e) {}
+  }
+
+  // Fallback 2: Retrieve cached teacher_id from localStorage / sessionStorage
+  if (!teacherId) {
+    try {
+      teacherId = sessionStorage.getItem("teacher_id") || localStorage.getItem("teacher_id");
+    } catch (e) {}
+  }
+
+  // Cache teacherId whenever detected so subsequent tabs or refreshes work seamlessly
+  if (teacherId) {
+    try {
+      sessionStorage.setItem("teacher_id", teacherId);
+      localStorage.setItem("teacher_id", teacherId);
+    } catch (e) {}
+  }
 
   // DOM Elements
   const elLoading = document.getElementById("loading");
@@ -48,7 +75,14 @@ document.addEventListener("DOMContentLoaded", () => {
   let currentFilter = "all"; // 'all' | 'pending' | 'confirmed'
 
   if (!teacherId) {
-    showError("Доступ ограничен", "Откройте кабинет учителя напрямую через меню бота в Telegram.");
+    showError(
+      "Доступ ограничен",
+      "Пожалуйста, отправьте команду /start в чате бота и откройте ведомость через меню."
+    );
+    if (elRetryBtn && tg?.close) {
+      elRetryBtn.textContent = "Вернуться в бот";
+      elRetryBtn.onclick = () => tg.close();
+    }
     return;
   }
 

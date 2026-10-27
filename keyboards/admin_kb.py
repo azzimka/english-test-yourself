@@ -2,9 +2,17 @@ from typing import List, Dict, Any
 from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo
 from config import WEBAPP_URL
 
-def get_admin_main_kb() -> ReplyKeyboardMarkup:
-    if WEBAPP_URL:
-        results_btn = KeyboardButton(text="📊 Результаты учеников", web_app=WebAppInfo(url=f"{WEBAPP_URL}/teacher"))
+def get_admin_main_kb(teacher_id: int | None = None) -> ReplyKeyboardMarkup:
+    if WEBAPP_URL and teacher_id:
+        results_btn = KeyboardButton(
+            text="📊 Результаты учеников",
+            web_app=WebAppInfo(url=f"{WEBAPP_URL}/teacher?teacher_id={teacher_id}")
+        )
+    elif WEBAPP_URL:
+        results_btn = KeyboardButton(
+            text="📊 Результаты учеников",
+            web_app=WebAppInfo(url=f"{WEBAPP_URL}/teacher")
+        )
     else:
         results_btn = KeyboardButton(text="📊 Результаты учеников")
 
