@@ -32,10 +32,8 @@ async def setup_bot_ui(bot: Bot):
         await bot.set_my_description(
             description=(
                 "🇬🇧 English Lab\n\n"
-                "Бот для удобного проведения школьных тестов и олимпиад по английскому языку.\n\n"
-                "👩‍🏫 Учитель: загружайте тесты (PDF, Word, текст) — нейросеть мгновенно создаст онлайн-тест, а оценки можно проверить и утвердить в 1 клик.\n"
-                "🎓 Ученик: проходите тесты прямо внутри Telegram в удобном приложении без рекламы и ожидания.\n\n"
-                "👇 Нажмите кнопку «Запустить» внизу экрана, чтобы начать!"
+                "👩‍🏫 Учитель: загружает тесты и утверждает оценки.\n"
+                "🎓 Ученик: решает задания и получает результат."
             )
         )
         logger.info("Bot welcome description configured successfully.")
@@ -44,7 +42,7 @@ async def setup_bot_ui(bot: Bot):
 
     try:
         await bot.set_my_short_description(
-            short_description="Школьные тесты и олимпиады по английскому языку с ИИ и Telegram Mini App."
+            short_description="Школьные тесты и олимпиады по английскому языку."
         )
     except Exception as e:
         logger.warning("Could not set bot short description: %s", e)
