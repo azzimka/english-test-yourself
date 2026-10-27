@@ -25,7 +25,7 @@ except Exception:
     ADMIN_IDS = []
 
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.5-flash")
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.6-flash")
 
 # Mini App Web Server settings
 WEBAPP_URL = os.getenv("WEBAPP_URL", "").rstrip("/")
