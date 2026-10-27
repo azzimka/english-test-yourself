@@ -35,7 +35,10 @@ from services.file_reader import (
     UnsupportedFileError,
     FileExtractionError,
 )
-from services.ai_parser import clean_json_string, ParsedTest, ParsedQuestion
+from services.ai_parser import (
+    clean_json_string, ParsedTest, ParsedQuestion,
+    extract_answer_keys, split_test_into_chunks, count_questions_in_text,
+)
 from services.web_server import normalize_answer, create_web_app
 from services.excel_exporter import generate_results_excel
 import docx
@@ -715,3 +718,239 @@ async def test_56_start_command_debounce():
     assert mock_msg.answer.call_count == count_before
 
 
+
+
+# =====================================================================
+# 6. CHUNKED PARSER TESTS (57-70)
+# =====================================================================
+
+def _generate_test_text(num_questions: int, include_answer_key: bool = True,
+                         include_reading: bool = False) -> str:
+    """
+    Generate a synthetic English test with the given number of questions.
+    Optionally includes an ANSWER KEY block and reading passages.
+    """
+    lines = ["Grade 5 English Level Test\n"]
+
+    reading_start = None
+    if include_reading and num_questions >= 30:
+        reading_start = 26  # Questions 26+ will be reading comprehension
+
+    for i in range(1, num_questions + 1):
+        if include_reading and reading_start and i == reading_start:
+            lines.append("\nText 1: The Adventures of Tom\n")
+            lines.append("Tom was a young boy who loved to explore the forest near his home. "
+                         "Every day after school, he would run to the edge of the woods and "
+                         "look for interesting things. One day, he found a mysterious map.\n")
+
+        lines.append(f"{i}. What is the correct answer for question {i}?")
+        lines.append(f"A) Option A{i}")
+        lines.append(f"B) Option B{i}")
+        lines.append(f"C) Option C{i}")
+        lines.append(f"D) Option D{i}")
+        lines.append("")
+
+    if include_answer_key:
+        lines.append("\nANSWER KEY")
+        for i in range(1, num_questions + 1):
+            letter = ["A", "B", "C", "D"][(i - 1) % 4]
+            lines.append(f"{i} {letter}")
+
+    return "\n".join(lines)
+
+
+# --- 57: extract_answer_keys finds ANSWER KEY ---
+def test_57_extract_answer_keys_found():
+    text = _generate_test_text(10, include_answer_key=True)
+    body, keys = extract_answer_keys(text)
+    assert "ANSWER KEY" in keys
+    assert "1 A" in keys
+    assert "10 B" in keys
+    # Body should NOT contain answer key
+    assert "ANSWER KEY" not in body
+
+
+# --- 58: extract_answer_keys returns empty when no key ---
+def test_58_extract_answer_keys_not_found():
+    text = _generate_test_text(10, include_answer_key=False)
+    body, keys = extract_answer_keys(text)
+    assert keys == ""
+    assert body == text
+
+
+# --- 59: count_questions detects correct number ---
+def test_59_count_questions_40():
+    text = _generate_test_text(40, include_answer_key=False)
+    count = count_questions_in_text(text)
+    assert count == 40
+
+
+def test_60_count_questions_100():
+    text = _generate_test_text(100, include_answer_key=False)
+    count = count_questions_in_text(text)
+    assert count == 100
+
+
+# --- 61: split_test_into_chunks on 40 questions ---
+def test_61_chunking_40_questions():
+    text = _generate_test_text(40, include_answer_key=False)
+    chunks = split_test_into_chunks(text, chunk_size=25)
+    assert len(chunks) == 2
+
+    # First chunk should contain question 1
+    assert "question 1?" in chunks[0]
+    # Second chunk should contain question 40
+    assert "question 40?" in chunks[1]
+
+    # No chunk should be empty
+    for chunk in chunks:
+        assert len(chunk.strip()) > 0
+
+
+# --- 62: split_test_into_chunks on 100 questions ---
+def test_62_chunking_100_questions():
+    text = _generate_test_text(100, include_answer_key=False)
+    chunks = split_test_into_chunks(text, chunk_size=25)
+    assert len(chunks) == 4
+
+    assert "question 1?" in chunks[0]
+    assert "question 100?" in chunks[3]
+
+
+# --- 63: small test stays in single chunk ---
+def test_63_small_test_single_chunk():
+    text = _generate_test_text(15, include_answer_key=False)
+    chunks = split_test_into_chunks(text, chunk_size=25)
+    assert len(chunks) == 1
+    assert "question 1?" in chunks[0]
+    assert "question 15?" in chunks[0]
+
+
+# --- 64: chunking preserves all questions (no question lost) ---
+def test_64_chunking_no_questions_lost():
+    text = _generate_test_text(50, include_answer_key=False)
+    chunks = split_test_into_chunks(text, chunk_size=25)
+
+    # Concatenate all chunks and verify all 50 questions are present
+    full_text = "\n".join(chunks)
+    for i in range(1, 51):
+        assert f"question {i}?" in full_text, f"Question {i} was lost during chunking!"
+
+
+# --- 65: answer key extraction with various formats ---
+def test_65_answer_key_formats():
+    # Test with "ANSWERS" format
+    text1 = "1. Question one\nA) a\nB) b\n\nANSWERS\n1 A\n"
+    body1, keys1 = extract_answer_keys(text1)
+    assert "ANSWERS" in keys1
+    assert "1 A" in keys1
+
+    # Test with "KEYS" format
+    text2 = "1. Question one\nA) a\nB) b\n\nKEYS\n1 B\n"
+    body2, keys2 = extract_answer_keys(text2)
+    assert "KEYS" in keys2
+
+    # Test with "КЛЮЧИ" format (Russian)
+    text3 = "1. Question one\nA) a\nB) b\n\nКЛЮЧИ\n1 A\n"
+    body3, keys3 = extract_answer_keys(text3)
+    assert "КЛЮЧИ" in keys3
+
+
+# --- 66: reading passage kept with its questions ---
+def test_66_reading_passage_kept_together():
+    text = _generate_test_text(40, include_answer_key=False, include_reading=True)
+    chunks = split_test_into_chunks(text, chunk_size=25)
+
+    # The reading passage "Text 1: The Adventures of Tom" should be in some chunk
+    all_text = "\n".join(chunks)
+    assert "Text 1: The Adventures of Tom" in all_text
+    assert "Tom was a young boy" in all_text
+
+
+# --- 67: verify merged questions have correct structure ---
+def test_67_merged_questions_structure():
+    """Simulate merging chunk results into ParsedTest."""
+    chunk1_questions = [
+        {
+            "question_text": f"Question {i}",
+            "options": ["A) a", "B) b", "C) c", "D) d"],
+            "correct_answer": "A) a",
+            "explanation": None,
+            "context_text": None,
+        }
+        for i in range(1, 26)
+    ]
+    chunk2_questions = [
+        {
+            "question_text": f"Question {i}",
+            "options": ["A) a", "B) b", "C) c", "D) d"],
+            "correct_answer": "B) b",
+            "explanation": None,
+            "context_text": None,
+        }
+        for i in range(26, 41)
+    ]
+
+    all_questions = chunk1_questions + chunk2_questions
+    parsed_questions = [ParsedQuestion(**q) for q in all_questions]
+
+    parsed_test = ParsedTest(
+        title="Test Merge Check",
+        description="Testing merge",
+        questions=parsed_questions,
+    )
+
+    assert len(parsed_test.questions) == 40
+    assert parsed_test.title == "Test Merge Check"
+    assert parsed_test.questions[0].question_text == "Question 1"
+    assert parsed_test.questions[39].question_text == "Question 40"
+
+
+# --- 68: verify 100-question merge integrity ---
+def test_68_merge_100_questions():
+    """Simulate merging 4 chunks of 25 questions each."""
+    all_questions = []
+    for chunk_idx in range(4):
+        start = chunk_idx * 25 + 1
+        end = start + 25
+        for i in range(start, end):
+            all_questions.append({
+                "question_text": f"Q{i}: Fill in the blank _____.",
+                "options": [f"A) opt_{i}_a", f"B) opt_{i}_b"],
+                "correct_answer": f"A) opt_{i}_a",
+                "explanation": None,
+                "context_text": None,
+            })
+
+    parsed_questions = [ParsedQuestion(**q) for q in all_questions]
+    parsed = ParsedTest(
+        title="Big Olympiad Test",
+        description="100 questions test",
+        questions=parsed_questions,
+    )
+
+    assert len(parsed.questions) == 100
+    # Verify sequential numbering in question text
+    for i, q in enumerate(parsed.questions, start=1):
+        assert f"Q{i}:" in q.question_text, f"Expected Q{i} but got {q.question_text}"
+
+
+# --- 69: edge case — empty text returns empty chunks ---
+def test_69_empty_text_chunks():
+    chunks = split_test_into_chunks("", chunk_size=25)
+    assert chunks == []
+
+    chunks2 = split_test_into_chunks("   \n  \n  ", chunk_size=25)
+    assert chunks2 == []
+
+
+# --- 70: chunking with 200 questions ---
+def test_70_chunking_200_questions():
+    text = _generate_test_text(200, include_answer_key=False)
+    chunks = split_test_into_chunks(text, chunk_size=25)
+    assert len(chunks) == 8
+
+    # Verify no question is lost
+    full_text = "\n".join(chunks)
+    for i in range(1, 201):
+        assert f"question {i}?" in full_text, f"Question {i} was lost!"
