@@ -5,16 +5,16 @@ from config import WEBAPP_URL
 def get_admin_main_kb(teacher_id: int | None = None) -> ReplyKeyboardMarkup:
     if WEBAPP_URL and teacher_id:
         results_btn = KeyboardButton(
-            text="📊 Результаты учеников",
+            text="📊 Результаты",
             web_app=WebAppInfo(url=f"{WEBAPP_URL}/teacher?teacher_id={teacher_id}")
         )
     elif WEBAPP_URL:
         results_btn = KeyboardButton(
-            text="📊 Результаты учеников",
+            text="📊 Результаты",
             web_app=WebAppInfo(url=f"{WEBAPP_URL}/teacher")
         )
     else:
-        results_btn = KeyboardButton(text="📊 Результаты учеников")
+        results_btn = KeyboardButton(text="📊 Результаты")
 
     kb = [
         [KeyboardButton(text="📝 Создать тест")],

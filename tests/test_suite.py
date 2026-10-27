@@ -683,3 +683,35 @@ async def test_55_animate_loading_status():
     for step in LOADING_STEPS:
         assert "<b>" in step and "</b>" in step
 
+
+@pytest.mark.asyncio
+async def test_56_start_command_debounce():
+    from unittest.mock import AsyncMock, MagicMock
+    from aiogram import types
+    from handlers.common import cmd_start, _in_flight_starts, _last_start_time
+
+    user_id = 888777
+    _in_flight_starts.clear()
+    _last_start_time.clear()
+
+    mock_msg = MagicMock(spec=types.Message)
+    mock_msg.from_user = MagicMock()
+    mock_msg.from_user.id = user_id
+    mock_msg.from_user.first_name = "DebounceTest"
+    mock_msg.answer = AsyncMock()
+    mock_msg.message = mock_msg
+
+    mock_state = MagicMock()
+    mock_state.clear = AsyncMock()
+    mock_state.set_state = AsyncMock()
+
+    # Call 1: should process
+    await cmd_start(mock_msg, mock_state)
+    assert mock_msg.answer.call_count >= 1
+
+    # Call 2 immediately: should be debounced / dropped without calling answer again
+    count_before = mock_msg.answer.call_count
+    await cmd_start(mock_msg, mock_state)
+    assert mock_msg.answer.call_count == count_before
+
+

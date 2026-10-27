@@ -428,8 +428,8 @@ async def delete_test_handler(callback: types.CallbackQuery):
     await list_admin_tests(callback)
 
 
-# --- 5. Меню "Результаты учеников" и выгрузка Excel ---
-@router.message(F.text == "📊 Результаты учеников")
+# --- 5. Меню "Результаты" и выгрузка Excel ---
+@router.message(F.text.in_({"📊 Результаты", "📊 Результаты учеников"}))
 async def show_results_overview(message: types.Message):
     tests = await get_tests(only_active=False)
     if not tests:
