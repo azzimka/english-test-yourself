@@ -954,3 +954,21 @@ def test_70_chunking_200_questions():
     full_text = "\n".join(chunks)
     for i in range(1, 201):
         assert f"question {i}?" in full_text, f"Question {i} was lost!"
+
+
+# --- 71: reading passage at the beginning does not swallow remaining chunks ---
+def test_71_reading_at_beginning_chunking():
+    text = (
+        "READING COMPREHENSION\n"
+        "Text 1: Once upon a time there was a kingdom.\n"
+        "1. Where was the kingdom? A) North B) South\n"
+        "2. Who lived there? A) King B) Queen\n"
+        + "\n".join([f"{i}. Question {i} is here. A) a B) b" for i in range(3, 60)])
+    )
+    chunks = split_test_into_chunks(text, chunk_size=25)
+    # 59 questions with chunk_size 25 should yield 3 chunks (25 + 25 + 9)
+    assert len(chunks) == 3
+    assert "Text 1: Once upon a time" in chunks[0]
+    assert "1. Where was the kingdom?" in chunks[0]
+    assert "26. Question 26 is here." in chunks[1]
+    assert "51. Question 51 is here." in chunks[2]

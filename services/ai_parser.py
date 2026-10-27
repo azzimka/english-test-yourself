@@ -221,14 +221,18 @@ def split_test_into_chunks(body_text: str, chunk_size: int = CHUNK_SIZE) -> List
         # Calculate the ideal end index for this chunk
         ideal_end_idx = min(current_chunk_start_idx + chunk_size, total_questions)
 
+        prev_q_pos = (
+            question_positions[current_chunk_start_idx - 1][1]
+            if current_chunk_start_idx > 0 else 0
+        )
+
         if ideal_end_idx >= total_questions:
             # Last chunk: take everything remaining
             chunk_text_start = question_positions[current_chunk_start_idx][1]
 
-            # Also include any reading passage text before the first question of this chunk
-            # that belongs to this set of questions
+            # Also include any reading passage text immediately before this chunk's first question
             passage_start = _find_passage_before_question(
-                body_text, chunk_text_start, reading_positions
+                body_text, chunk_text_start, reading_positions, prev_q_pos
             )
             if passage_start is not None and passage_start < chunk_text_start:
                 chunk_text_start = passage_start
@@ -247,18 +251,19 @@ def split_test_into_chunks(body_text: str, chunk_size: int = CHUNK_SIZE) -> List
         # Extract chunk text
         chunk_text_start = question_positions[current_chunk_start_idx][1]
 
-        # Include any reading passage before first question
+        # Include any reading passage immediately before first question
         passage_start = _find_passage_before_question(
-            body_text, chunk_text_start, reading_positions
+            body_text, chunk_text_start, reading_positions, prev_q_pos
         )
         if passage_start is not None and passage_start < chunk_text_start:
             chunk_text_start = passage_start
 
         if actual_end_idx < total_questions:
             chunk_text_end = question_positions[actual_end_idx][1]
-            # Also check for reading passage before the next chunk's first question
+            # Check for reading passage immediately before the next chunk's first question
+            prev_for_next = question_positions[actual_end_idx - 1][1]
             passage_before_next = _find_passage_before_question(
-                body_text, chunk_text_end, reading_positions
+                body_text, chunk_text_end, reading_positions, prev_for_next
             )
             if passage_before_next is not None and passage_before_next < chunk_text_end:
                 chunk_text_end = passage_before_next
@@ -275,19 +280,19 @@ def split_test_into_chunks(body_text: str, chunk_size: int = CHUNK_SIZE) -> List
 
 
 def _find_passage_before_question(
-    text: str, question_pos: int, reading_positions: List[int]
+    text: str,
+    question_pos: int,
+    reading_positions: List[int],
+    prev_question_pos: int = 0
 ) -> Optional[int]:
     """
-    Find the closest reading passage that appears before the given question position.
-    Returns the position if found and it's reasonably close; None otherwise.
+    Find a reading passage that appears immediately before the given question position
+    (i.e., between prev_question_pos and question_pos, with no intervening questions).
     """
-    closest = None
     for rp in reading_positions:
-        if rp < question_pos:
-            # Check there's no other question between this passage and our question
-            if closest is None or rp > closest:
-                closest = rp
-    return closest
+        if prev_question_pos <= rp < question_pos:
+            return rp
+    return None
 
 
 def _adjust_boundary_for_reading(
@@ -317,8 +322,7 @@ def _adjust_boundary_for_reading(
     if relevant_passage is None:
         return boundary_idx
 
-    # Check if the passage is "close" to the boundary (within 2 questions before it)
-    # This means the boundary might be splitting a passage-question group
+    # Find the first question that follows the reading passage
     passage_first_q_idx = None
     for i, (_, pos) in enumerate(question_positions):
         if pos > relevant_passage:
@@ -328,11 +332,8 @@ def _adjust_boundary_for_reading(
     if passage_first_q_idx is None:
         return boundary_idx
 
-    # If the boundary is within the passage's question range,
-    # look for the next section/passage break or use the original boundary
-    if passage_first_q_idx < boundary_idx:
-        # The passage's questions started before the boundary —
-        # check if there's another passage or section break after boundary
+    # Only adjust if the passage started recently (within 10 questions before boundary)
+    if passage_first_q_idx < boundary_idx and (boundary_idx - passage_first_q_idx <= 10):
         next_passage_pos = None
         for rp in reading_positions:
             if rp > boundary_pos:
@@ -340,10 +341,9 @@ def _adjust_boundary_for_reading(
                 break
 
         if next_passage_pos is not None:
-            # Find which question index corresponds to after the next passage
+            # Find which question index corresponds to the next passage
             for i, (_, pos) in enumerate(question_positions):
                 if pos >= next_passage_pos:
-                    # Don't extend too far (max 10 extra questions)
                     if i - boundary_idx <= 10:
                         return i
                     break
@@ -497,34 +497,37 @@ async def _parse_single_request(
     Parse a small test (≤ 25 questions) in a single Groq API request.
     Falls back to Gemini if Groq fails.
     """
-    # Try Gemini first if available
+    # Primary: Groq single request
+    if GROQ_API_KEY:
+        try:
+            client = get_groq_client()
+            user_prompt = f"Категория теста: {test_type}.\nРаспарси материалы в формате JSON:\n\n{text_content}"
+
+            messages = [
+                {"role": "system", "content": PROMPT_SYSTEM},
+                {"role": "user", "content": user_prompt},
+            ]
+
+            raw_response = await _call_groq_with_fallback(
+                client, messages, models, max_tokens=8192, temperature=0.1
+            )
+
+            cleaned = clean_json_string(raw_response)
+            data = json.loads(cleaned)
+            parsed = ParsedTest(**data)
+            logger.info("Successfully parsed test in single request (%d questions)", len(parsed.questions))
+            return parsed
+        except Exception as e:
+            logger.warning("Groq single request failed: %s. Falling back to Gemini...", e)
+
+    # Fallback to Gemini if Groq fails or is not configured
     if GEMINI_API_KEY:
         try:
             return await _parse_with_gemini(text_content, test_type)
         except Exception as e:
-            logger.warning("Gemini API failed: %s. Falling back to Groq...", e)
+            logger.error("Gemini fallback also failed: %s", e)
 
-    # Groq single request
-    if GROQ_API_KEY:
-        client = get_groq_client()
-        user_prompt = f"Категория теста: {test_type}.\nРаспарси материалы в формате JSON:\n\n{text_content}"
-
-        messages = [
-            {"role": "system", "content": PROMPT_SYSTEM},
-            {"role": "user", "content": user_prompt},
-        ]
-
-        raw_response = await _call_groq_with_fallback(
-            client, messages, models, max_tokens=8192, temperature=0.1
-        )
-
-        cleaned = clean_json_string(raw_response)
-        data = json.loads(cleaned)
-        parsed = ParsedTest(**data)
-        logger.info("Successfully parsed test in single request (%d questions)", len(parsed.questions))
-        return parsed
-
-    raise ValueError("Ни GEMINI_API_KEY, ни GROQ_API_KEY не заданы в .env!")
+    raise ValueError("Ни Groq API, ни Gemini API не смогли распарсить тест.")
 
 
 async def _parse_chunked(
