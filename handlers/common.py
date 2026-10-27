@@ -12,6 +12,7 @@ from keyboards.student_kb import get_student_main_kb
 from states.student_states import RegistrationStates
 
 router = Router()
+fallback_router = Router()
 
 # In-flight lock & debounce to prevent double greetings when user taps Start repeatedly
 _in_flight_starts: set[int] = set()
@@ -211,7 +212,7 @@ async def process_cancel(callback: types.CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
-@router.message(F.text)
+@fallback_router.message(F.text)
 async def handle_fallback_text(message: types.Message):
     """Graceful fallback for unknown text outside states."""
     inline_kb = InlineKeyboardMarkup(inline_keyboard=[

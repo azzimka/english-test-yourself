@@ -6,7 +6,7 @@ from aiogram.types import BotCommand, BotCommandScopeDefault, BotCommandScopeCha
 
 from config import BOT_TOKEN, WEB_PORT, WEB_HOST, WEBAPP_URL, ADMIN_IDS
 from database import init_db
-from handlers import admin_router, common_router, student_router
+from handlers import admin_router, common_router, student_router, fallback_router
 from services.web_server import create_web_app
 
 logging.basicConfig(
@@ -62,10 +62,14 @@ async def main():
     logger.info("Setting up bot commands and welcome screens...")
     await setup_bot_ui(bot)
 
-    # Register routers (common_router MUST be first to handle /start and reset states unconditionally)
+    # Register routers:
+    # 1. common_router handles /start and commands first to unconditionally reset state
+    # 2. admin_router and student_router handle specific button texts and states
+    # 3. fallback_router handles any unrecognized text last
     dp.include_router(common_router)
     dp.include_router(admin_router)
     dp.include_router(student_router)
+    dp.include_router(fallback_router)
 
     # Setup Mini App web server
     app = create_web_app(bot)
