@@ -6,14 +6,13 @@ from aiogram import Router, types, F, Bot
 from aiogram.fsm.context import FSMContext
 from aiogram.enums import ChatAction
 from aiogram.exceptions import TelegramBadRequest, TelegramRetryAfter
-from aiogram.types import BufferedInputFile, WebAppInfo, InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.types import WebAppInfo, InlineKeyboardMarkup, InlineKeyboardButton
 
 from config import ADMIN_IDS, WEBAPP_URL
 from database import (
     create_test_with_questions,
     get_tests,
     get_test_by_id,
-    toggle_test_active,
     delete_test,
     get_test_questions,
     get_test_submissions,
@@ -24,7 +23,6 @@ from services import (
     FileExtractionError,
     parse_test_content,
     ParsedTest,
-    generate_results_excel,
 )
 from keyboards.admin_kb import (
     get_admin_main_kb,
@@ -373,7 +371,7 @@ async def list_admin_tests(event: types.Message | types.CallbackQuery):
             await event.answer(text, parse_mode="HTML")
         return
 
-    text = "📂 <b>Список ваших тестов:</b>\n🟢 — активен и виден ученикам\n🔴 — скрыт\n\nНажмите на тест для управления:"
+    text = "📂 <b>Список ваших тестов:</b>\n\nНажмите на тест для управления:"
     kb = get_admin_tests_kb(tests)
     if isinstance(event, types.CallbackQuery):
         await event.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
@@ -393,7 +391,6 @@ async def manage_single_test(callback: types.CallbackQuery):
     questions = await get_test_questions(test_id)
     submissions = await get_test_submissions(test_id)
 
-    status_str = "🟢 Активен (виден ученикам)" if test["is_active"] else "🔴 Скрыт от учеников"
     type_str = "Олимпиадный" if test["test_type"] == "olympiad" else "Обычный"
 
     text = (
@@ -401,23 +398,15 @@ async def manage_single_test(callback: types.CallbackQuery):
         f"📌 <b>Название:</b> {html.escape(test['title'])}\n"
         f"🏷 <b>Тип:</b> {html.escape(type_str)}\n"
         f"📊 <b>Вопросов:</b> {len(questions)}\n"
-        f"👥 <b>Сдали учеников:</b> {len(submissions)}\n"
-        f"Статус: {status_str}"
+        f"👥 <b>Сдали учеников:</b> {len(submissions)}"
     )
 
     await callback.message.edit_text(
         text,
-        reply_markup=get_admin_test_actions_kb(test_id, bool(test["is_active"])),
+        reply_markup=get_admin_test_actions_kb(test_id),
         parse_mode="HTML"
     )
     await callback.answer()
-
-
-@router.callback_query(F.data.startswith("toggle_active:"))
-async def toggle_active_handler(callback: types.CallbackQuery):
-    test_id = int(callback.data.split(":")[1])
-    await toggle_test_active(test_id)
-    await manage_single_test(callback)
 
 
 @router.callback_query(F.data.startswith("delete_test:"))
@@ -428,7 +417,7 @@ async def delete_test_handler(callback: types.CallbackQuery):
     await list_admin_tests(callback)
 
 
-# --- 5. Меню "Результаты" и выгрузка Excel ---
+# --- 5. Меню "Результаты" ---
 @router.message(F.text.in_({"📊 Результаты", "📊 Результаты учеников"}))
 async def show_results_overview(message: types.Message):
     tests = await get_tests(only_active=False)
@@ -447,10 +436,6 @@ async def show_results_overview(message: types.Message):
             InlineKeyboardButton(text="🚀 Открыть ведомость (Mini App)", web_app=WebAppInfo(url=teacher_url))
         ])
 
-    buttons.append([
-        InlineKeyboardButton(text="📥 Скачать Excel ведомость", callback_data="admin_export_menu")
-    ])
-
     kb = InlineKeyboardMarkup(inline_keyboard=buttons)
 
     text = (
@@ -458,38 +443,4 @@ async def show_results_overview(message: types.Message):
         "Откройте веб-ведомость прямо внутри Telegram, чтобы посмотреть ответы учеников и утвердить их оценки в 1 клик:"
     )
     await message.answer(text, reply_markup=kb, parse_mode="HTML")
-
-
-@router.callback_query(F.data == "admin_export_menu")
-async def show_export_menu(callback: types.CallbackQuery):
-    tests = await get_tests(only_active=False)
-    text = "📊 <b>Выберите тест для скачивания Excel ведомости:</b>"
-    await callback.message.edit_text(text, reply_markup=get_admin_tests_kb(tests), parse_mode="HTML")
-    await callback.answer()
-
-
-@router.callback_query(F.data.startswith("export_test_excel:"))
-async def export_excel_handler(callback: types.CallbackQuery):
-    test_id = int(callback.data.split(":")[1])
-    test = await get_test_by_id(test_id)
-    if not test:
-        await callback.answer("Тест не найден")
-        return
-
-    submissions = await get_test_submissions(test_id)
-    if not submissions:
-        await callback.answer("Этот тест пока еще никто не сдал!", show_alert=True)
-        return
-
-    excel_io = generate_results_excel(test["title"], submissions)
-    file_bytes = excel_io.getvalue()
-
-    filename = f"Results_{test['title'][:20].replace(' ', '_')}.xlsx"
-    input_file = BufferedInputFile(file_bytes, filename=filename)
-
-    await callback.message.answer_document(
-        document=input_file,
-        caption=f"📊 Ведомость результатов по тесту:\n<b>{html.escape(test['title'])}</b>\nВсего сдач: {len(submissions)}",
-        parse_mode="HTML"
-    )
     await callback.answer()
