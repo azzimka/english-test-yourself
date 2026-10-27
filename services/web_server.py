@@ -172,7 +172,7 @@ async def handle_api_submit(request: web.Request) -> web.Response:
             if row:
                 student_info = dict(row)
 
-    # Notify teacher via Telegram
+    # Notify teacher via Telegram safely with chunking
     bot: Bot = request.app["bot"]
     pct = round((score / total) * 100) if total > 0 else 0
     minutes = time_spent // 60
@@ -203,15 +203,27 @@ async def handle_api_submit(request: web.Request) -> web.Response:
             f"   Правильный ответ: <code>{html.escape(correct_ans)}</code>"
         )
 
-    teacher_report = "\n".join(breakdown_lines)
+    # Safe message chunking helper for Telegram 4096 character limit
+    chunks = []
+    current_chunk = []
+    curr_len = 0
+    for line in breakdown_lines:
+        line_len = len(line) + 1
+        if curr_len + line_len > 3800 and current_chunk:
+            chunks.append("\n".join(current_chunk))
+            current_chunk = [line]
+            curr_len = line_len
+        else:
+            current_chunk.append(line)
+            curr_len += line_len
+    if current_chunk:
+        chunks.append("\n".join(current_chunk))
+
     for admin_id in ADMIN_IDS:
-        try:
-            if len(teacher_report) > 4000:
-                await bot.send_message(admin_id, "\n".join(breakdown_lines[:15]), parse_mode="HTML")
-                await bot.send_message(admin_id, "\n".join(breakdown_lines[15:]), parse_mode="HTML")
-            else:
-                await bot.send_message(admin_id, teacher_report, parse_mode="HTML")
-        except Exception as e:
-            logger.warning("Failed to notify admin %s: %s", admin_id, e)
+        for chunk in chunks:
+            try:
+                await bot.send_message(admin_id, chunk, parse_mode="HTML")
+            except Exception as e:
+                logger.warning("Failed to notify admin %s: %s", admin_id, e)
 
     return web.json_response({"success": True, "submission_id": sub_id})

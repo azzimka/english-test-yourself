@@ -1,10 +1,10 @@
 import json
+import re
 import logging
 from typing import List, Optional
 from pydantic import BaseModel, Field
-from google import genai
-from google.genai import types
-from config import GEMINI_API_KEY, GEMINI_MODEL
+from groq import AsyncGroq
+from config import GROQ_API_KEY, GROQ_MODEL, GEMINI_API_KEY, GEMINI_MODEL
 
 logger = logging.getLogger(__name__)
 
@@ -23,71 +23,122 @@ class ParsedTest(BaseModel):
 
 PROMPT_SYSTEM = """
 You are an expert English teacher and exam specialist.
-Analyze the provided test or olympiad materials (which may be a Word document, raw text, or a photo/scan of a worksheet).
-Carefully parse all tasks into individual questions.
+Analyze the provided test or olympiad materials in English and structure them into a formal test schema.
 
 Rules:
-1. Preserve the original English questions accurately.
+1. Preserve original English questions accurately.
 2. If there is a reading passage (Reading Comprehension) that applies to multiple questions, place the passage text in `context_text` for those questions.
-3. If options (A, B, C, D) exist, extract them into `options`.
-4. If it is an open cloze / word formation task (fill in the blank without multiple choice), leave `options` empty.
-5. Identify the correct answer: look for asterisks (*), pluses (+), bold text, or answer keys at the bottom/end of the file. If no keys are provided, determine the correct answer yourself.
+3. If multiple-choice options (A, B, C, D) exist, extract them into the `options` array (formatted as 'A) ...', 'B) ...', etc.).
+4. If it is an open cloze / word formation task (fill in the blank without multiple choice), leave `options` as an empty list [].
+5. Identify the correct answer: look for asterisks (*), pluses (+), bold text, or answer keys at the bottom/end of the materials. If no keys are provided, determine the correct answer yourself.
 6. Provide a concise explanation for the correct answer where appropriate.
 7. Generate a concise, suitable title for the test.
+
+CRITICAL: Output MUST be a valid JSON object matching this exact structure:
+{
+  "title": "string",
+  "description": "string",
+  "questions": [
+    {
+      "question_text": "string",
+      "context_text": "string or null",
+      "options": ["string"],
+      "correct_answer": "string",
+      "explanation": "string or null"
+    }
+  ]
+}
+Return ONLY the raw JSON object, without any additional explanations outside the JSON.
 """
 
-def get_genai_client() -> genai.Client:
-    return genai.Client(api_key=GEMINI_API_KEY)
+def clean_json_string(text: str) -> str:
+    text = text.strip()
+    match = re.search(r"```(?:json)?\s*([\s\S]*?)\s*```", text)
+    if match:
+        return match.group(1).strip()
+    return text
+
+def get_groq_client() -> AsyncGroq:
+    return AsyncGroq(api_key=GROQ_API_KEY)
 
 async def parse_test_content(
-    text_content: Optional[str] = None,
-    file_bytes: Optional[bytes] = None,
-    mime_type: Optional[str] = None,
+    text_content: str,
     test_type: str = "regular"
 ) -> ParsedTest:
     """
-    Parses test content (text, Word .docx, PDF, or image) using Gemini API with automatic fallback.
+    Parses test content using Groq API (llama-3.3-70b-versatile) with automatic fallback.
+    Takes extracted text from PDF, Word (.docx), or plain text.
     """
-    client = get_genai_client()
-    
-    contents = [f"Тип теста: {test_type}. {PROMPT_SYSTEM}"]
-    
-    if text_content:
-        contents.append(f"Материалы теста:\n\n{text_content}")
-    elif file_bytes and mime_type:
-        part = types.Part.from_bytes(data=file_bytes, mime_type=mime_type)
-        contents.append(part)
-        contents.append("Распознай и распарси все задания теста из этого документа/изображения.")
-    else:
-        raise ValueError("Either text_content or (file_bytes and mime_type) must be provided.")
+    if not text_content or not text_content.strip():
+        raise ValueError("Содержимое теста пусто или не удалось извлечь текст.")
 
-    # Try primary model first (gemini-3.6-flash is fastest and most responsive)
-    models_to_try = [GEMINI_MODEL, "gemini-3.6-flash", "gemini-3.8-flash"]
-    models_to_try = list(dict.fromkeys(models_to_try))
+    # Primary: Groq API
+    if GROQ_API_KEY:
+        client = get_groq_client()
+        models_to_try = [
+            GROQ_MODEL,
+            "openai/gpt-oss-120b",
+            "openai/gpt-oss-20b",
+            "qwen/qwen3.8-27b",
+            "llama-3.3-70b-versatile",
+            "llama-3.1-8b-instant"
+        ]
+        # deduplicate preserving order
+        models_to_try = list(dict.fromkeys([m for m in models_to_try if m]))
 
-    last_error = None
-    for model_name in models_to_try:
-        try:
-            logger.info("Attempting test parsing with model: %s", model_name)
-            response = client.models.generate_content(
-                model=model_name,
-                contents=contents,
-                config=types.GenerateContentConfig(
-                    response_mime_type="application/json",
-                    response_schema=ParsedTest,
+        user_prompt = f"Категория теста: {test_type}.\nРаспарси материалы в формате JSON:\n\n{text_content}"
+
+        last_error = None
+        for model_name in models_to_try:
+            try:
+                logger.info("Attempting test parsing with Groq model: %s", model_name)
+                completion = await client.chat.completions.create(
+                    model=model_name,
+                    messages=[
+                        {"role": "system", "content": PROMPT_SYSTEM},
+                        {"role": "user", "content": user_prompt}
+                    ],
+                    response_format={"type": "json_object"},
                     temperature=0.2,
                 )
-            )
-            # When response_schema is provided, response.parsed contains the Pydantic instance
-            if response.parsed:
-                return response.parsed
-            
-            # Fallback if raw text returned
-            data = json.loads(response.text)
-            return ParsedTest(**data)
-            
-        except Exception as e:
-            logger.warning("Model %s failed with error: %s. Trying next model...", model_name, e)
-            last_error = e
+                raw_response = completion.choices[0].message.content
+                if not raw_response:
+                    continue
 
-    raise RuntimeError(f"All Gemini models failed to parse the test. Last error: {last_error}")
+                cleaned_json = clean_json_string(raw_response)
+                data = json.loads(cleaned_json)
+                parsed = ParsedTest(**data)
+                logger.info("Successfully parsed test with Groq (%s questions)", len(parsed.questions))
+                return parsed
+            except Exception as e:
+                logger.warning("Groq model %s failed: %s. Trying next...", model_name, e)
+                last_error = e
+
+        logger.error("All Groq models failed. Last error: %s", last_error)
+        raise RuntimeError(f"Не удалось распарсить тест через Groq API: {last_error}")
+
+    # Fallback to Gemini if GROQ_API_KEY is not set yet
+    elif GEMINI_API_KEY:
+        from google import genai
+        from google.genai import types
+        logger.info("GROQ_API_KEY not set in .env, falling back to Gemini API...")
+        gemini_client = genai.Client(api_key=GEMINI_API_KEY)
+        contents = [
+            f"Тип теста: {test_type}. {PROMPT_SYSTEM}",
+            f"Материалы теста:\n\n{text_content}"
+        ]
+        response = await gemini_client.aio.models.generate_content(
+            model=GEMINI_MODEL,
+            contents=contents,
+            config=types.GenerateContentConfig(
+                response_mime_type="application/json",
+                response_schema=ParsedTest,
+                temperature=0.2,
+            )
+        )
+        if response.parsed:
+            return response.parsed
+        data = json.loads(response.text)
+        return ParsedTest(**data)
+    else:
+        raise ValueError("Ни GROQ_API_KEY, ни GEMINI_API_KEY не заданы в .env!")

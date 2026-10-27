@@ -10,6 +10,7 @@ async def init_db():
     """Initializes the database schema."""
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute("PRAGMA foreign_keys = ON;")
+        await db.execute("PRAGMA journal_mode = WAL;")
         
         # Table: users
         await db.execute("""

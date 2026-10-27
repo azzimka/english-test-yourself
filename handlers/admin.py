@@ -16,7 +16,9 @@ from database import (
     get_test_submissions,
 )
 from services import (
-    extract_text_from_docx,
+    extract_text_from_file,
+    UnsupportedFileError,
+    FileExtractionError,
     parse_test_content,
     ParsedTest,
     generate_results_excel,
@@ -44,10 +46,10 @@ router.callback_query.filter(F.from_user.id.in_(ADMIN_IDS))
 async def start_create_test(message: types.Message, state: FSMContext):
     await state.clear()
     await message.answer(
-        "📝 **Создание нового теста**\n\n"
+        "📝 <b>Создание нового теста</b>\n\n"
         "Выберите категорию теста:",
         reply_markup=get_test_type_choice_kb(),
-        parse_mode="Markdown"
+        parse_mode="HTML"
     )
     await state.set_state(UploadTestStates.waiting_for_test_type)
 
@@ -87,15 +89,15 @@ async def process_custom_title(message: types.Message, state: FSMContext):
 async def ask_for_test_content(message: types.Message, state: FSMContext, is_edit: bool = False):
     data = await state.get_data()
     title = data.get("custom_title")
-    title_str = f"«{title}»" if title else "<i>(определит ИИ)</i>"
+    title_str = f"«{html.escape(title)}»" if title else "<i>(определит ИИ)</i>"
 
     text = (
         f"📌 Название теста: <b>{title_str}</b>\n\n"
         "📥 <b>Теперь отправьте материалы теста:</b>\n"
-        "• Документ <b>PDF</b> или <b>Word (.docx)</b>\n"
-        "• Обычный текст сообщением\n"
-        "• Или четкую фотографию / скан страницы\n\n"
-        "ИИ автоматически распознает вопросы, варианты и правильные ответы."
+        "• Документ <b>PDF (.pdf)</b> или <b>Word (.docx)</b>\n"
+        "• Текстовый файл <b>(.txt)</b>\n"
+        "• Или обычный текст заданий сообщением в чат\n\n"
+        "⚡ Нейросеть мгновенно распознает вопросы, варианты ответов и правильные ключи."
     )
     if is_edit:
         await message.edit_text(text, parse_mode="HTML")
@@ -104,68 +106,68 @@ async def ask_for_test_content(message: types.Message, state: FSMContext, is_edi
     await state.set_state(UploadTestStates.waiting_for_content)
 
 
-# --- 2. Обработка загружаемого контента (текст, документ Word, фото) ---
-@router.message(UploadTestStates.waiting_for_content)
+# --- 2. Обработка загружаемого контента (документы PDF, DOCX, TXT или текст) ---
+
+# Если прислали фото в режиме загрузки теста — выводим вежливое предупреждение
+@router.message(UploadTestStates.waiting_for_content, F.photo)
+async def process_photo_rejected(message: types.Message):
+    await message.answer(
+        "📷 <b>Анализ фотографий не поддерживается</b>\n\n"
+        "Нейросеть Groq работает с электронными документами. Пожалуйста, отправьте файл в формате:\n"
+        "• <b>PDF (.pdf)</b>\n"
+        "• <b>Word (.docx)</b>\n"
+        "• <b>Текстовый файл (.txt)</b>\n"
+        "• Или просто скопируйте текст задания в сообщение чата.",
+        parse_mode="HTML"
+    )
+
+
+@router.message(UploadTestStates.waiting_for_content, F.text | F.document)
 async def process_test_upload(message: types.Message, state: FSMContext, bot: Bot):
     data = await state.get_data()
     test_type = data.get("test_type", "regular")
     status_msg = await message.answer(
-        "⏳ **Нейросеть (Gemini 3.5 Flash) анализирует материалы...**\nОбычно это занимает 2–5 секунд.",
-        parse_mode="Markdown"
+        "⏳ <b>Нейросеть (Groq) анализирует материалы...</b>\nОбычно это занимает 1–3 секунды.",
+        parse_mode="HTML"
     )
 
     text_content = None
-    file_bytes = None
-    mime_type = None
 
     try:
         if message.text:
-            text_content = message.text
+            text_content = message.text.strip()
+            if len(text_content) < 10:
+                await status_msg.edit_text(
+                    "❌ Текст задания слишком короткий. Пожалуйста, отправьте полные материалы теста или документ.",
+                    parse_mode="HTML"
+                )
+                return
         elif message.document:
-            file_name = (message.document.file_name or "").lower()
+            file_name = message.document.file_name or ""
             file_io = BytesIO()
             await bot.download(message.document, destination=file_io)
             file_bytes = file_io.getvalue()
 
-            if file_name.endswith(".docx"):
-                mime_type = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-            elif file_name.endswith(".pdf"):
-                mime_type = "application/pdf"
-            elif file_name.endswith((".txt", ".rtf")):
-                mime_type = "text/plain"
-            else:
-                await status_msg.edit_text(
-                    "❌ Пожалуйста, отправьте документ в формате **PDF**, **Word (.docx)**, текстовый файл или фото.",
-                    parse_mode="Markdown"
-                )
+            try:
+                text_content = extract_text_from_file(file_name, file_bytes)
+            except (UnsupportedFileError, FileExtractionError) as file_err:
+                await status_msg.edit_text(str(file_err), parse_mode="HTML")
                 return
 
-        elif message.photo:
-            photo = message.photo[-1]
-            file_io = BytesIO()
-            await bot.download(photo, destination=file_io)
-            file_bytes = file_io.getvalue()
-            mime_type = "image/jpeg"
-        else:
-            await status_msg.edit_text(
-                "❌ Неподдерживаемый тип файла. Отправьте файл PDF, Word (.docx), текст или фото.",
-                parse_mode="Markdown"
-            )
-            return
-
-        # Запрос к Gemini
+        # Запрос к нейросети Groq
         parsed_test: ParsedTest = await parse_test_content(
             text_content=text_content,
-            file_bytes=file_bytes,
-            mime_type=mime_type,
             test_type=test_type
         )
 
         if not parsed_test.questions:
-            await status_msg.edit_text("⚠️ Не удалось обнаружить вопросы в предоставленных материалах. Проверьте файл и попробуйте снова.")
+            await status_msg.edit_text(
+                "⚠️ Не удалось обнаружить вопросы в предоставленных материалах. Проверьте файл и попробуйте снова.",
+                parse_mode="HTML"
+            )
             return
 
-        # Если учитель заранее указал название, используем его
+        # Если учитель заранее указал название, сохраняем его
         custom_title = data.get("custom_title")
         if custom_title:
             parsed_test.title = custom_title
@@ -176,7 +178,20 @@ async def process_test_upload(message: types.Message, state: FSMContext, bot: Bo
 
     except Exception as e:
         logger.exception("Error processing uploaded test")
-        await status_msg.edit_text(f"❌ Произошла ошибка при обработке теста: {e}")
+        await status_msg.edit_text(
+            f"❌ <b>Произошла ошибка при обработке теста:</b>\n<code>{html.escape(str(e))}</code>",
+            parse_mode="HTML"
+        )
+
+
+# Если прислан другой тип медиа (голос, видео, стикер)
+@router.message(UploadTestStates.waiting_for_content)
+async def process_unsupported_media_upload(message: types.Message):
+    await message.answer(
+        "❌ <b>Неподдерживаемый тип сообщения</b>\n\n"
+        "Пожалуйста, отправьте документ в формате <b>PDF</b>, <b>Word (.docx)</b>, текстовый файл <b>(.txt)</b> или текст заданий сообщением.",
+        parse_mode="HTML"
+    )
 
 
 async def render_test_preview(message: types.Message, parsed_dict: dict, test_type: str, state: FSMContext):
@@ -205,18 +220,33 @@ async def render_test_preview(message: types.Message, parsed_dict: dict, test_ty
 
 
 # --- 2.3 Обработка случайной отправки файла вне сценария создания теста ---
-@router.message(F.document | F.photo)
+@router.message(F.document)
 async def handle_unexpected_file_upload(message: types.Message, state: FSMContext):
     current_state = await state.get_state()
     if current_state == UploadTestStates.waiting_for_content:
         return
 
     await message.answer(
-        "📄 <b>Я вижу ваш файл!</b>\n\n"
+        "📄 <b>Я вижу ваш документ!</b>\n\n"
         "Чтобы загрузить его в базу, нажмите кнопку <b>«📝 Создать тест»</b> в меню внизу, "
         "выберите категорию и отправьте файл повторно.",
         parse_mode="HTML"
     )
+
+
+@router.message(F.photo)
+async def handle_unexpected_photo_upload(message: types.Message, state: FSMContext):
+    current_state = await state.get_state()
+    if current_state == UploadTestStates.waiting_for_content:
+        return
+
+    await message.answer(
+        "📷 <b>Анализ фотографий не поддерживается</b>\n\n"
+        "Бот работает с электронными документами <b>PDF (.pdf)</b>, <b>Word (.docx)</b> или текстом сообщений.",
+        parse_mode="HTML"
+    )
+
+
 @router.callback_query(F.data == "edit_title_btn", UploadTestStates.waiting_for_confirmation)
 async def start_editing_title(callback: types.CallbackQuery, state: FSMContext):
     await callback.message.reply("✍️ Напишите новое название для этого теста сообщением:")
@@ -261,9 +291,9 @@ async def confirm_publish_test(callback: types.CallbackQuery, state: FSMContext)
 
     type_name = "Олимпиадные тесты" if test_type == "olympiad" else "Обычные тесты"
     await callback.message.edit_text(
-        f"🎉 **Тест опубликован!** (ID: {test_id})\n\n"
-        f"Ученики уже могут найти его в разделе **«{type_name}»** и приступить к решению.",
-        parse_mode="Markdown"
+        f"🎉 <b>Тест опубликован!</b> (ID: {test_id})\n\n"
+        f"Ученики уже могут найти его в разделе <b>«{html.escape(type_name)}»</b> и приступить к решению.",
+        parse_mode="HTML"
     )
     await callback.answer("Опубликовано!")
 
@@ -274,21 +304,21 @@ async def confirm_publish_test(callback: types.CallbackQuery, state: FSMContext)
 async def list_admin_tests(event: types.Message | types.CallbackQuery):
     tests = await get_tests(only_active=False)
     if not tests:
-        text = "У вас пока нет созданных тестов. Нажмите **«📝 Создать тест»**, чтобы добавить первый!"
+        text = "У вас пока нет созданных тестов. Нажмите <b>«📝 Создать тест»</b>, чтобы добавить первый!"
         if isinstance(event, types.CallbackQuery):
-            await event.message.edit_text(text, parse_mode="Markdown")
+            await event.message.edit_text(text, parse_mode="HTML")
             await event.answer()
         else:
-            await event.answer(text, parse_mode="Markdown")
+            await event.answer(text, parse_mode="HTML")
         return
 
-    text = "📂 **Список ваших тестов:**\n🟢 — активен и виден ученикам\n🔴 — скрыт\n\nНажмите на тест для управления:"
+    text = "📂 <b>Список ваших тестов:</b>\n🟢 — активен и виден ученикам\n🔴 — скрыт\n\nНажмите на тест для управления:"
     kb = get_admin_tests_kb(tests)
     if isinstance(event, types.CallbackQuery):
-        await event.message.edit_text(text, reply_markup=kb, parse_mode="Markdown")
+        await event.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
         await event.answer()
     else:
-        await event.answer(text, reply_markup=kb, parse_mode="Markdown")
+        await event.answer(text, reply_markup=kb, parse_mode="HTML")
 
 
 @router.callback_query(F.data.startswith("manage_test:"))
@@ -306,18 +336,18 @@ async def manage_single_test(callback: types.CallbackQuery):
     type_str = "Олимпиадный" if test["test_type"] == "olympiad" else "Обычный"
 
     text = (
-        f"📋 **Управление тестом:**\n\n"
-        f"📌 **Название:** {test['title']}\n"
-        f"🏷 **Тип:** {type_str}\n"
-        f"📊 **Вопросов:** {len(questions)}\n"
-        f"👥 **Сдали учеников:** {len(submissions)}\n"
+        f"📋 <b>Управление тестом:</b>\n\n"
+        f"📌 <b>Название:</b> {html.escape(test['title'])}\n"
+        f"🏷 <b>Тип:</b> {html.escape(type_str)}\n"
+        f"📊 <b>Вопросов:</b> {len(questions)}\n"
+        f"👥 <b>Сдали учеников:</b> {len(submissions)}\n"
         f"Статус: {status_str}"
     )
 
     await callback.message.edit_text(
         text,
         reply_markup=get_admin_test_actions_kb(test_id, bool(test["is_active"])),
-        parse_mode="Markdown"
+        parse_mode="HTML"
     )
     await callback.answer()
 
@@ -325,7 +355,7 @@ async def manage_single_test(callback: types.CallbackQuery):
 @router.callback_query(F.data.startswith("toggle_active:"))
 async def toggle_active_handler(callback: types.CallbackQuery):
     test_id = int(callback.data.split(":")[1])
-    new_status = await toggle_test_active(test_id)
+    await toggle_test_active(test_id)
     await manage_single_test(callback)
 
 
@@ -345,8 +375,8 @@ async def show_results_overview(message: types.Message):
         await message.answer("Пока нет тестов для отображения результатов.")
         return
 
-    text = "📊 **Выберите тест для скачивания ведомости оценок:**"
-    await message.answer(text, reply_markup=get_admin_tests_kb(tests), parse_mode="Markdown")
+    text = "📊 <b>Выберите тест для скачивания ведомости оценок:</b>"
+    await message.answer(text, reply_markup=get_admin_tests_kb(tests), parse_mode="HTML")
 
 
 @router.callback_query(F.data.startswith("export_test_excel:"))
@@ -370,6 +400,7 @@ async def export_excel_handler(callback: types.CallbackQuery):
 
     await callback.message.answer_document(
         document=input_file,
-        caption=f"📊 Ведомость результатов по тесту:\n**{test['title']}**\nВсего сдач: {len(submissions)}"
+        caption=f"📊 Ведомость результатов по тесту:\n<b>{html.escape(test['title'])}</b>\nВсего сдач: {len(submissions)}",
+        parse_mode="HTML"
     )
     await callback.answer()
