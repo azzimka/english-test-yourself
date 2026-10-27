@@ -19,7 +19,6 @@ async def setup_bot_ui(bot: Bot):
     """Configures bot commands menu and welcome description for first-time users."""
     commands = [
         BotCommand(command="start", description="🚀 Главное меню"),
-        BotCommand(command="help", description="ℹ️ Инструкция и помощь"),
         BotCommand(command="id", description="🆔 Узнать свой Telegram ID"),
     ]
     try:

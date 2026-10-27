@@ -79,8 +79,7 @@ async def cmd_start(event: types.Message | types.CallbackQuery, state: FSMContex
                 InlineKeyboardButton(text="📊 Ведомость результатов (Mini App)", web_app=WebAppInfo(url=f"{WEBAPP_URL}/teacher?teacher_id={user_id}"))
             ])
         buttons.append([
-            InlineKeyboardButton(text="📂 Мои тесты", callback_data="admin_tests_list"),
-            InlineKeyboardButton(text="ℹ️ Помощь", callback_data="nav_student_help")
+            InlineKeyboardButton(text="📂 Мои тесты", callback_data="admin_tests_list")
         ])
 
         inline_kb = InlineKeyboardMarkup(inline_keyboard=buttons)
@@ -108,8 +107,7 @@ async def cmd_start(event: types.Message | types.CallbackQuery, state: FSMContex
                 InlineKeyboardButton(text="🏆 Олимпиадные", callback_data="nav_student_olympiad")
             ],
             [
-                InlineKeyboardButton(text="📈 Мои результаты", callback_data="nav_student_results"),
-                InlineKeyboardButton(text="ℹ️ Помощь", callback_data="nav_student_help")
+                InlineKeyboardButton(text="📈 Мои результаты", callback_data="nav_student_results")
             ]
         ])
         await message.answer(text, reply_markup=inline_kb, parse_mode="HTML")
