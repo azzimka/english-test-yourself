@@ -2,6 +2,7 @@ import asyncio
 import logging
 from aiohttp import web
 from aiogram import Bot, Dispatcher
+from aiogram.types import BotCommand, BotCommandScopeDefault
 
 from config import BOT_TOKEN, WEB_PORT, WEB_HOST, WEBAPP_URL
 from database import init_db
@@ -14,6 +15,40 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+async def setup_bot_ui(bot: Bot):
+    """Configures bot commands menu and welcome description for first-time users."""
+    commands = [
+        BotCommand(command="start", description="🚀 Главное меню"),
+        BotCommand(command="help", description="ℹ️ Инструкция и помощь"),
+        BotCommand(command="id", description="🆔 Узнать свой Telegram ID"),
+    ]
+    try:
+        await bot.set_my_commands(commands, scope=BotCommandScopeDefault())
+        logger.info("Bot commands menu configured successfully.")
+    except Exception as e:
+        logger.warning("Could not set bot commands: %s", e)
+
+    try:
+        await bot.set_my_description(
+            description=(
+                "🇬🇧 English Test Yourself\n\n"
+                "Бот для удобного проведения школьных тестов и олимпиад по английскому языку.\n\n"
+                "👩‍🏫 Учитель: загружайте тесты (PDF, Word, текст) — нейросеть мгновенно создаст онлайн-тест, а оценки можно проверить и утвердить в 1 клик.\n"
+                "🎓 Ученик: проходите тесты прямо внутри Telegram в удобном приложении без рекламы и ожидания.\n\n"
+                "👇 Нажмите кнопку «Запустить» внизу экрана, чтобы начать!"
+            )
+        )
+        logger.info("Bot welcome description configured successfully.")
+    except Exception as e:
+        logger.warning("Could not set bot description: %s", e)
+
+    try:
+        await bot.set_my_short_description(
+            short_description="Школьные тесты и олимпиады по английскому языку с ИИ и Telegram Mini App."
+        )
+    except Exception as e:
+        logger.warning("Could not set bot short description: %s", e)
+
 async def main():
     logger.info("Initializing database...")
     await init_db()
@@ -21,10 +56,13 @@ async def main():
     bot = Bot(token=BOT_TOKEN)
     dp = Dispatcher()
 
+    logger.info("Setting up bot commands and welcome screens...")
+    await setup_bot_ui(bot)
+
     # Register routers
     dp.include_router(admin_router)
-    dp.include_router(common_router)
     dp.include_router(student_router)
+    dp.include_router(common_router)
 
     # Setup Mini App web server
     app = create_web_app(bot)

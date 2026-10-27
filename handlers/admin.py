@@ -43,9 +43,14 @@ router.callback_query.filter(F.from_user.id.in_(ADMIN_IDS))
 
 # --- 1. Меню "Создать тест" ---
 @router.message(F.text == "📝 Создать тест")
-async def start_create_test(message: types.Message, state: FSMContext):
+@router.callback_query(F.data == "nav_create_test")
+async def start_create_test(event: types.Message | types.CallbackQuery, state: FSMContext):
     await state.clear()
-    await message.answer(
+    msg = event if isinstance(event, types.Message) else event.message
+    if isinstance(event, types.CallbackQuery):
+        await event.answer()
+
+    await msg.answer(
         "📝 <b>Создание нового теста</b>\n\n"
         "Выберите категорию теста:",
         reply_markup=get_test_type_choice_kb(),

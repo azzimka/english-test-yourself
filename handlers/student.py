@@ -38,18 +38,26 @@ def normalize_answer(text: str) -> str:
 
 # --- 1. Просмотр доступных тестов ---
 @router.message(F.text.in_(["📚 Обычные тесты", "🏆 Олимпиадные тесты"]))
-async def show_tests_catalog(message: types.Message):
-    user = await get_user_by_telegram_id(message.from_user.id)
+@router.callback_query(F.data.in_(["nav_student_regular", "nav_student_olympiad"]))
+async def show_tests_catalog(event: types.Message | types.CallbackQuery):
+    user_id = event.from_user.id
+    msg = event if isinstance(event, types.Message) else event.message
+    if isinstance(event, types.CallbackQuery):
+        await event.answer()
+
+    user = await get_user_by_telegram_id(user_id)
     if not user:
-        await message.answer("Сначала пройдите регистрацию: напишите команду /start")
+        await msg.answer("Сначала пройдите регистрацию: напишите команду /start")
         return
 
-    test_type = "olympiad" if "Олимпиадные" in message.text else "regular"
+    event_text = getattr(event, "text", "") or ""
+    event_data = getattr(event, "data", "") or ""
+    test_type = "olympiad" if ("Олимпиадные" in event_text or "olympiad" in event_data) else "regular"
     tests = await get_tests(test_type=test_type, only_active=True)
 
     if not tests:
         type_word = "олимпиадных" if test_type == "olympiad" else "обычных"
-        await message.answer(f"Пока нет активных {type_word} тестов. Учительница добавит их в ближайшее время!")
+        await msg.answer(f"Пока нет активных {type_word} тестов. Учительница добавит их в ближайшее время!")
         return
 
     # Получаем уже сданные тесты этого ученика
@@ -60,7 +68,7 @@ async def show_tests_catalog(message: types.Message):
     text = f"{header}\nВыберите тест, который задала учительница:"
     kb = get_student_tests_kb(tests, completed_map)
 
-    await message.answer(text, reply_markup=kb, parse_mode="HTML")
+    await msg.answer(text, reply_markup=kb, parse_mode="HTML")
 
 
 # --- 2. Карточка выбранного теста ---
@@ -284,15 +292,21 @@ async def finish_quiz(message: types.Message, state: FSMContext):
 
 # --- 5. Мои результаты ---
 @router.message(F.text == "📈 Мои результаты")
-async def show_student_history(message: types.Message):
-    user = await get_user_by_telegram_id(message.from_user.id)
+@router.callback_query(F.data == "nav_student_results")
+async def show_student_history(event: types.Message | types.CallbackQuery):
+    user_id = event.from_user.id
+    msg = event if isinstance(event, types.Message) else event.message
+    if isinstance(event, types.CallbackQuery):
+        await event.answer()
+
+    user = await get_user_by_telegram_id(user_id)
     if not user:
-        await message.answer("Сначала пройдите регистрацию: напишите команду /start")
+        await msg.answer("Сначала пройдите регистрацию: напишите команду /start")
         return
 
     submissions = await get_student_submissions(user["id"])
     if not submissions:
-        await message.answer("Вы еще не прошли ни одного теста. Выберите тест в меню и начните!")
+        await msg.answer("Вы еще не прошли ни одного теста. Выберите тест в меню и начните!")
         return
 
     lines = ["📈 <b>История ваших тестов:</b>\n"]
@@ -314,4 +328,4 @@ async def show_student_history(message: types.Message):
                 f"   Статус: <i>Сдано на проверку</i>"
             )
 
-    await message.answer("\n\n".join(lines), parse_mode="HTML")
+    await msg.answer("\n\n".join(lines), parse_mode="HTML")
