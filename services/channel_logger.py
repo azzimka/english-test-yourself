@@ -1,6 +1,7 @@
 import html
 import logging
 from datetime import datetime
+from typing import Optional
 from aiogram import Bot, types
 from aiogram.types import BufferedInputFile
 from config import LOG_CHANNEL_ID

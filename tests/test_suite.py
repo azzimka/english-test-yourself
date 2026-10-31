@@ -421,6 +421,8 @@ async def test_36_db_delete_test_cascade():
 
 @pytest.fixture
 def aiohttp_app():
+    if 999001 not in config.ADMIN_IDS:
+        config.ADMIN_IDS.append(999001)
     bot = Bot(token=config.BOT_TOKEN)
     app = create_web_app(bot)
     return app

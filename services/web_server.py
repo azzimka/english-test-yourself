@@ -68,14 +68,28 @@ async def handle_index(request: web.Request) -> web.Response:
     index_file = WEB_DIR / "index.html"
     if not index_file.exists():
         return web.Response(text="index.html not found", status=404)
-    return web.FileResponse(index_file)
+    return web.FileResponse(
+        index_file,
+        headers={
+            "Cache-Control": "no-cache, no-store, must-revalidate",
+            "Pragma": "no-cache",
+            "Expires": "0",
+        },
+    )
 
 
 async def handle_teacher_index(request: web.Request) -> web.Response:
     teacher_file = WEB_DIR / "teacher.html"
     if not teacher_file.exists():
         return web.Response(text="teacher.html not found", status=404)
-    return web.FileResponse(teacher_file)
+    return web.FileResponse(
+        teacher_file,
+        headers={
+            "Cache-Control": "no-cache, no-store, must-revalidate",
+            "Pragma": "no-cache",
+            "Expires": "0",
+        },
+    )
 
 
 async def handle_api_get_test(request: web.Request) -> web.Response:

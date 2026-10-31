@@ -217,6 +217,8 @@ async def test_e2e_teacher_grading_workflow(test_app):
     if teacher_id not in config.ADMIN_IDS:
         config.ADMIN_IDS.append(teacher_id)
 
+    await db.init_db()
+
     # 1. Create a test
     test_id = await db.create_test_with_questions(
         title="Challenger2 Verification Test",
