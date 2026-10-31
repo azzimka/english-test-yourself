@@ -1,3 +1,4 @@
+import html
 import logging
 from io import BytesIO
 from typing import Tuple, Optional
@@ -32,7 +33,7 @@ def extract_text_from_pdf(file_bytes: bytes) -> str:
         raise
     except Exception as e:
         logger.warning("Error reading PDF: %s", e)
-        raise FileExtractionError(f"Ошибка при чтении PDF-документа: {e}")
+        raise FileExtractionError(f"Ошибка при чтении PDF-документа: {html.escape(str(e))}")
 
 def extract_text_from_docx_bytes(file_bytes: bytes) -> str:
     """Extracts text from paragraphs and tables of a docx file."""
@@ -60,7 +61,7 @@ def extract_text_from_docx_bytes(file_bytes: bytes) -> str:
         raise
     except Exception as e:
         logger.warning("Error reading DOCX: %s", e)
-        raise FileExtractionError(f"Ошибка при чтении Word (.docx) документа: {e}")
+        raise FileExtractionError(f"Ошибка при чтении Word (.docx) документа: {html.escape(str(e))}")
 
 def extract_text_from_plain_text(file_bytes: bytes) -> str:
     """Extracts text with automatic encoding detection (utf-8, cp1251, latin1)."""
@@ -106,3 +107,24 @@ def extract_text_from_file(file_name: str, file_bytes: bytes) -> str:
             "• Текстовые файлы <b>(.txt)</b>\n"
             "• Текст сообщением в чат"
         )
+
+
+def extract_file_content_and_images(file_name: str, file_bytes: bytes) -> Tuple[str, list]:
+    """
+    Extracts both textual content and embedded images/diagrams from a file.
+    For PDF documents, automatically extracts diagrams and illustrations.
+    Returns (text_content, extracted_images_list).
+    """
+    text = extract_text_from_file(file_name, file_bytes)
+    images = []
+
+    lower_name = (file_name or "").lower()
+    if lower_name.endswith(".pdf"):
+        try:
+            from services.image_extractor import extract_images_from_pdf
+            images = extract_images_from_pdf(file_bytes)
+        except Exception as e:
+            logger.warning("Could not extract images from PDF: %s", e)
+            images = []
+
+    return text, images

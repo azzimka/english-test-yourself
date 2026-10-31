@@ -96,19 +96,56 @@ document.addEventListener("DOMContentLoaded", () => {
         `;
       }
 
+      const isMulti = q.question_type === "multiple_choice";
+      const hasOptions = q.options && q.options.length > 0;
+
+      let typeBadge = "";
+      if (isMulti) {
+        typeBadge = `<span class="question-type-badge">Выберите несколько вариантов</span>`;
+      }
+
       html += `
         <div class="question-header">
           <span class="question-num">Вопрос ${qNum} из ${testData.questions.length}</span>
+          ${typeBadge}
         </div>
+      `;
+
+      if (q.image_url) {
+        html += `
+          <div class="question-image-box">
+            <img src="${escapeHtml(q.image_url)}" alt="Задание ${qNum}" class="question-diagram-img" loading="lazy" />
+          </div>
+        `;
+      }
+
+      html += `
         <div class="question-text">${escapeHtml(q.question_text)}</div>
       `;
 
-      // Multiple choice with custom radio buttons
-      if (q.options && q.options.length > 0) {
+      if (isMulti && hasOptions) {
+        // Multiple choice with custom checkboxes
         html += `<div class="options-list">`;
-        q.options.forEach((opt, optIdx) => {
+        q.options.forEach((opt) => {
           html += `
-            <label class="option-card" data-qid="${q.id}" data-val="${escapeHtml(opt)}">
+            <label class="option-card option-card-multi" data-qid="${q.id}" data-val="${escapeHtml(opt)}">
+              <input type="checkbox" name="question_${q.id}" value="${escapeHtml(opt)}">
+              <span class="custom-checkbox">
+                <svg class="checkbox-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
+                  <polyline points="20 6 9 17 4 12"></polyline>
+                </svg>
+              </span>
+              <span class="option-text">${escapeHtml(opt)}</span>
+            </label>
+          `;
+        });
+        html += `</div>`;
+      } else if (hasOptions) {
+        // Single choice with custom radio buttons
+        html += `<div class="options-list">`;
+        q.options.forEach((opt) => {
+          html += `
+            <label class="option-card option-card-single" data-qid="${q.id}" data-val="${escapeHtml(opt)}">
               <input type="radio" name="question_${q.id}" value="${escapeHtml(opt)}">
               <span class="custom-radio"></span>
               <span class="option-text">${escapeHtml(opt)}</span>
@@ -129,15 +166,20 @@ document.addEventListener("DOMContentLoaded", () => {
       elQuizContainer.appendChild(card);
     });
 
-    // Attach Event Listeners to Options
-    elQuizContainer.querySelectorAll(".option-card").forEach((optLabel) => {
+    // Attach Event Listeners to Single Choice Options
+    elQuizContainer.querySelectorAll(".option-card-single").forEach((optLabel) => {
       optLabel.addEventListener("click", function (e) {
+        e.preventDefault();
         const qid = this.getAttribute("data-qid");
         const val = this.getAttribute("data-val");
 
         // Clear sibling selected states
         const parentList = this.closest(".options-list");
-        parentList.querySelectorAll(".option-card").forEach((c) => c.classList.remove("selected"));
+        parentList.querySelectorAll(".option-card-single").forEach((c) => {
+          c.classList.remove("selected");
+          const r = c.querySelector('input[type="radio"]');
+          if (r) r.checked = false;
+        });
 
         this.classList.add("selected");
         const radio = this.querySelector('input[type="radio"]');
@@ -145,6 +187,36 @@ document.addEventListener("DOMContentLoaded", () => {
 
         userAnswers[qid] = val;
         markCardAnswered(qid, true);
+        updateProgress();
+      });
+    });
+
+    // Attach Event Listeners to Multiple Choice Checkboxes
+    elQuizContainer.querySelectorAll(".option-card-multi").forEach((optLabel) => {
+      optLabel.addEventListener("click", function (e) {
+        e.preventDefault();
+        const checkbox = this.querySelector('input[type="checkbox"]');
+        if (!checkbox) return;
+
+        checkbox.checked = !checkbox.checked;
+        if (checkbox.checked) {
+          this.classList.add("selected");
+        } else {
+          this.classList.remove("selected");
+        }
+
+        const qid = this.getAttribute("data-qid");
+        const parentList = this.closest(".options-list");
+        const selectedLabels = parentList.querySelectorAll(".option-card-multi.selected");
+        const selectedVals = Array.from(selectedLabels).map((el) => el.getAttribute("data-val"));
+
+        if (selectedVals.length > 0) {
+          userAnswers[qid] = selectedVals;
+          markCardAnswered(qid, true);
+        } else {
+          delete userAnswers[qid];
+          markCardAnswered(qid, false);
+        }
         updateProgress();
       });
     });

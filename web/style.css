@@ -109,6 +109,7 @@ body {
 .question-header {
   display: flex;
   align-items: center;
+  justify-content: space-between;
   gap: 8px;
   margin-bottom: 12px;
 }
@@ -119,6 +120,20 @@ body {
   text-transform: uppercase;
   letter-spacing: 0.05em;
   color: var(--text-muted);
+}
+
+.question-type-badge {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  background-color: var(--bg-secondary);
+  border: 1px solid var(--border-light);
+  border-radius: 20px;
+  padding: 3px 10px;
+  letter-spacing: 0.02em;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
 }
 
 .reading-box {
@@ -142,6 +157,27 @@ body {
   color: var(--text-primary);
   margin-bottom: 6px;
   font-style: normal;
+}
+
+.question-image-box {
+  margin: 10px 0 16px 0;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  background-color: var(--bg-secondary);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-sm);
+  padding: 10px;
+  overflow: hidden;
+}
+
+.question-diagram-img {
+  max-width: 100%;
+  max-height: 380px;
+  height: auto;
+  object-fit: contain;
+  border-radius: 6px;
+  display: block;
 }
 
 .question-text {
@@ -218,6 +254,45 @@ body {
 }
 
 .option-card.selected .custom-radio::after {
+  transform: scale(1);
+}
+
+/* --- CUSTOM CHECKBOX FOR MULTIPLE SELECTION --- */
+.option-card input[type="checkbox"] {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.custom-checkbox {
+  flex-shrink: 0;
+  width: 20px;
+  height: 20px;
+  border-radius: 6px;
+  border: 2px solid #C7C7CC;
+  margin-right: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background-color: transparent;
+  transition: var(--transition);
+}
+
+.checkbox-icon {
+  width: 13px;
+  height: 13px;
+  color: var(--white);
+  transform: scale(0);
+  transition: transform 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+  stroke-width: 3;
+}
+
+.option-card.selected .custom-checkbox {
+  background-color: var(--black);
+  border-color: var(--black);
+}
+
+.option-card.selected .custom-checkbox .checkbox-icon {
   transform: scale(1);
 }
 

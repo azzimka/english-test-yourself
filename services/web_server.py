@@ -4,7 +4,7 @@ import logging
 from aiohttp import web
 from aiogram import Bot
 
-from config import WEB_DIR, ADMIN_IDS
+from config import WEB_DIR, ADMIN_IDS, DATA_DIR
 from database import (
     get_user_by_telegram_id,
     get_test_by_id,
@@ -19,9 +19,11 @@ from database import (
 
 logger = logging.getLogger(__name__)
 
-def normalize_answer(text: str) -> str:
+def normalize_answer(text: Any) -> str:
+    if isinstance(text, list):
+        return ", ".join(normalize_answer(x) for x in text if x)
     t = str(text).strip().lower()
-    for prefix in ["a)", "b)", "c)", "d)", "e)", "a.", "b.", "c.", "d.", "e."]:
+    for prefix in ["a)", "b)", "c)", "d)", "e)", "f)", "g)", "h)", "a.", "b.", "c.", "d.", "e.", "f.", "g.", "h."]:
         if t.startswith(prefix):
             t = t[len(prefix):].strip()
             break
@@ -42,6 +44,9 @@ def create_web_app(bot: Bot) -> web.Application:
     app["bot"] = bot
 
     # Static routes
+    MEDIA_DIR = DATA_DIR / "tests"
+    MEDIA_DIR.mkdir(parents=True, exist_ok=True)
+    app.router.add_static("/static/tests/", path=MEDIA_DIR, name="static_tests")
     app.router.add_get("/", handle_index)
     app.router.add_get("/teacher", handle_teacher_index)
     app.router.add_static("/static/", path=WEB_DIR, name="static")
@@ -109,7 +114,9 @@ async def handle_api_get_test(request: web.Request) -> web.Response:
             "order_num": q["order_num"],
             "question_text": q["question_text"],
             "context_text": q.get("context_text"),
-            "options": q.get("options", [])
+            "options": q.get("options", []),
+            "image_url": q.get("image_url"),
+            "question_type": q.get("question_type", "single_choice" if q.get("options") else "open_text")
         })
 
     return web.json_response({
@@ -136,7 +143,7 @@ async def handle_api_submit(request: web.Request) -> web.Response:
 
     test_id = data.get("test_id")
     student_id = data.get("student_id")
-    user_answers = data.get("answers", {}) # { "qid": "val" }
+    user_answers = data.get("answers", {}) # { "qid": "val" or ["val1", "val2"] }
     time_spent = int(data.get("time_spent_seconds", 0))
 
     if not test_id or not student_id:
@@ -149,40 +156,45 @@ async def handle_api_submit(request: web.Request) -> web.Response:
     questions = await get_test_questions(test_id)
     q_map = {q["id"]: q for q in questions}
 
-    score = 0
     detailed_answers = []
 
     for q in questions:
         qid_str = str(q["id"])
-        user_ans_raw = user_answers.get(qid_str, "").strip()
-        correct_raw = q["correct_answer"].strip()
+        user_ans_raw = user_answers.get(qid_str)
 
-        user_norm = normalize_answer(user_ans_raw)
-        correct_norm = normalize_answer(correct_raw)
+        if isinstance(user_ans_raw, list):
+            cleaned_list = [str(x).strip() for x in user_ans_raw if str(x).strip()]
+            user_ans_val = cleaned_list if cleaned_list else "(Без ответа)"
+        elif isinstance(user_ans_raw, str):
+            s = user_ans_raw.strip()
+            user_ans_val = s if s else "(Без ответа)"
+        elif user_ans_raw is None:
+            user_ans_val = "(Без ответа)"
+        else:
+            s = str(user_ans_raw).strip()
+            user_ans_val = s if s else "(Без ответа)"
 
-        is_correct = (user_norm == correct_norm)
-        if not is_correct and len(correct_norm) == 1 and user_ans_raw:
-            if user_ans_raw.lower().startswith(correct_norm):
-                is_correct = True
+        correct_raw = str(q.get("correct_answer", "")).strip()
 
-        if is_correct:
-            score += 1
-
+        # NOTE: Automated AI grading is strictly disabled.
+        # Questions are stored un-graded (is_correct=None). Teacher will manually verify each answer.
         detailed_answers.append({
             "question": q["question_text"],
-            "user_answer": user_ans_raw if user_ans_raw else "(Без ответа)",
+            "user_answer": user_ans_val,
             "correct_answer": correct_raw,
-            "is_correct": is_correct,
-            "explanation": q.get("explanation")
+            "is_correct": None,
+            "explanation": q.get("explanation"),
+            "image_url": q.get("image_url"),
+            "question_type": q.get("question_type", "single_choice" if q.get("options") else "open_text")
         })
 
     total = len(questions)
 
-    # Save to database
+    # Save to database (status is 'pending', initial score is 0 until teacher grades it)
     sub_id = await save_submission(
         student_id=student_id,
         test_id=test_id,
-        score=score,
+        score=0,
         total_questions=total,
         answers=detailed_answers,
         time_spent_seconds=time_spent
@@ -200,9 +212,8 @@ async def handle_api_submit(request: web.Request) -> web.Response:
             if row:
                 student_info = dict(row)
 
-    # Notify teacher via Telegram (compact notification)
+    # Notify teacher via Telegram (clean notification without AI scoring)
     bot: Bot = request.app["bot"]
-    pct = round((score / total) * 100) if total > 0 else 0
     minutes = time_spent // 60
     seconds = time_spent % 60
 
@@ -213,8 +224,8 @@ async def handle_api_submit(request: web.Request) -> web.Response:
         "🔔 <b>Ученик сдал тест!</b>\n\n"
         f"👤 <b>Ученик:</b> {html.escape(st_name)} ({html.escape(st_class)})\n"
         f"📝 <b>Тест:</b> {html.escape(test['title'])}\n"
-        f"🎯 <b>Итоговый результат:</b> {score}/{total} ({pct}%)\n"
-        f"⏱ <b>Время решения:</b> {minutes} мин. {seconds} сек."
+        f"⏱ <b>Время решения:</b> {minutes} мин. {seconds} сек.\n\n"
+        "📋 <i>Работа ожидает вашей проверки в Кабинете учителя.</i>"
     )
 
     for admin_id in ADMIN_IDS:
@@ -265,6 +276,13 @@ async def handle_api_teacher_submissions(request: web.Request) -> web.Response:
         except Exception:
             item["answers"] = []
         item.pop("answers_json", None)
+
+        # Pending unconfirmed submissions must always be in clean unrated state (score=0, is_correct=None)
+        if item.get("status") == "pending" and not item.get("confirmed_at"):
+            item["score"] = 0
+            for a in item["answers"]:
+                a["is_correct"] = None
+
         submissions.append(item)
 
     return web.json_response({
@@ -297,7 +315,12 @@ async def handle_api_teacher_confirm(request: web.Request) -> web.Response:
     except ValueError:
         return web.json_response({"error": "Некорректный submission_id."}, status=400)
 
-    updated = await confirm_submission(sub_id_int)
+    score_val = data.get("score")
+    score_int = int(score_val) if score_val is not None else None
+    answers_val = data.get("answers")
+    answers_list = answers_val if isinstance(answers_val, list) else None
+
+    updated = await confirm_submission(sub_id_int, score=score_int, answers=answers_list)
     if not updated:
         return web.json_response({"error": "Сдача не найдена."}, status=404)
 

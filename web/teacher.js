@@ -289,15 +289,48 @@ document.addEventListener("DOMContentLoaded", () => {
       card.className = "submission-card";
       card.id = `sub-card-${sub.id}`;
 
-      const pct = Math.round((sub.score / (sub.total_questions || 1)) * 100);
+      const totalQ = sub.total_questions || (sub.answers ? sub.answers.length : 1);
       const isPending = sub.status === "pending";
+      const gradedTotal = sub.answers
+        ? sub.answers.filter((x) => x.is_correct === true || x.is_correct === false).length
+        : 0;
+
+      const pct = Math.round((sub.score / totalQ) * 100);
       const statusBadge = isPending
         ? `<span class="status-badge-pending">⏳ На проверке</span>`
         : `<span class="status-badge-confirmed">✅ Утверждено</span>`;
 
+      let scoreBadgeHtml = "";
+      if (isPending) {
+        if (gradedTotal === 0) {
+          scoreBadgeHtml = `<span class="score-unrated">Ожидает проверки</span>`;
+        } else {
+          scoreBadgeHtml = `<span class="score-grading">${sub.score}/${totalQ} (${pct}%)</span>`;
+        }
+      } else {
+        scoreBadgeHtml = `<span class="score-confirmed">${sub.score}/${totalQ} (${pct}%)</span>`;
+      }
+
       const minutes = Math.floor((sub.time_spent_seconds || 0) / 60);
       const seconds = (sub.time_spent_seconds || 0) % 60;
       const timeStr = `${minutes} мин. ${seconds} сек.`;
+
+      // Progress Tracker for pending submissions
+      let progressHtml = "";
+      if (isPending && sub.answers && sub.answers.length > 0) {
+        const progressPct = Math.round((gradedTotal / totalQ) * 100);
+        progressHtml = `
+          <div class="grading-progress-box">
+            <div class="grading-progress-label">
+              <span>Проверено заданий:</span>
+              <span class="progress-nums"><strong>${gradedTotal}</strong> из ${totalQ}</span>
+            </div>
+            <div class="grading-progress-track">
+              <div class="grading-progress-fill" style="width: ${progressPct}%;"></div>
+            </div>
+          </div>
+        `;
+      }
 
       // Build Questions & Answers HTML
       let answersHtml = "";
@@ -305,24 +338,73 @@ document.addEventListener("DOMContentLoaded", () => {
         answersHtml += `<div class="answers-items">`;
         sub.answers.forEach((a, idx) => {
           const qNum = idx + 1;
-          const statusIcon = a.is_correct ? "✅" : "❌";
-          const explanationHtml = a.explanation ? `<div class="explanation-box">Правило: ${escapeHtml(a.explanation)}</div>` : "";
+          const isCorrect = a.is_correct === true;
+          const isIncorrect = a.is_correct === false;
+          const imageHtml = a.image_url
+            ? `<div class="teacher-q-img-wrap"><img src="${escapeHtml(a.image_url)}" class="teacher-q-img" alt="Diagram" /></div>`
+            : "";
+
+          let ansDisplay = "";
+          let userAns = a.user_answer;
+          if (typeof userAns === "string" && userAns.trim().startsWith("[") && userAns.trim().endsWith("]")) {
+            try {
+              const parsed = JSON.parse(userAns);
+              if (Array.isArray(parsed)) userAns = parsed;
+            } catch (e) {}
+          }
+
+          if (Array.isArray(userAns)) {
+            const nonEmpty = userAns.filter((item) => item && String(item).trim() && String(item).trim() !== "(Без ответа)");
+            if (nonEmpty.length > 0) {
+              ansDisplay = `<div class="teacher-student-ans-tags">` +
+                nonEmpty.map((val) => `<span class="teacher-ans-tag">${escapeHtml(val)}</span>`).join("") +
+                `</div>`;
+            } else {
+              ansDisplay = `<span class="teacher-student-ans-val empty">(Без ответа)</span>`;
+            }
+          } else {
+            const strVal = userAns != null ? String(userAns).trim() : "";
+            const hasAns = strVal && strVal !== "(Без ответа)";
+            ansDisplay = hasAns
+              ? `<span class="teacher-student-ans-val">${escapeHtml(strVal)}</span>`
+              : `<span class="teacher-student-ans-val empty">(Без ответа)</span>`;
+          }
+
+          const cardStateClass = isCorrect ? "card-correct" : isIncorrect ? "card-incorrect" : "";
 
           answersHtml += `
-            <div class="answer-row">
-              <div class="answer-q-title">${qNum}. ${escapeHtml(a.question)}</div>
-              <div class="answer-choices">
-                <div class="choice-line">
-                  <span class="choice-label">Ответ ученика:</span>
-                  <span class="val-user">${escapeHtml(a.user_answer || "—")}</span>
-                  <span class="is-correct-icon">${statusIcon}</span>
-                </div>
-                <div class="choice-line">
-                  <span class="choice-label">Правильно:</span>
-                  <span class="val-correct">${escapeHtml(a.correct_answer || "—")}</span>
-                </div>
+            <div class="teacher-q-card ${cardStateClass}" data-sub-id="${sub.id}" data-q-idx="${idx}">
+              <div class="teacher-q-top">
+                <span class="teacher-q-badge">№${qNum}</span>
+                <div class="teacher-q-text">${escapeHtml(a.question)}</div>
               </div>
-              ${explanationHtml}
+              ${imageHtml}
+              <div class="teacher-student-ans-row">
+                <div class="teacher-student-ans-left">
+                  <span class="ans-label-dot"></span>
+                  <span class="teacher-student-ans-label">Ответ ученика</span>
+                </div>
+                ${ansDisplay}
+              </div>
+              <div class="teacher-grade-actions">
+                <button type="button" class="btn-grade btn-grade-correct ${isCorrect ? "active" : ""}" data-action="correct" data-sub-id="${sub.id}" data-q-idx="${idx}" aria-label="Верно">
+                  <span class="grade-icon-circle">
+                    <svg class="grade-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                      <polyline points="20 6 9 17 4 12"></polyline>
+                    </svg>
+                  </span>
+                  <span class="grade-text">Верно</span>
+                </button>
+                <button type="button" class="btn-grade btn-grade-incorrect ${isIncorrect ? "active" : ""}" data-action="incorrect" data-sub-id="${sub.id}" data-q-idx="${idx}" aria-label="Неверно">
+                  <span class="grade-icon-circle">
+                    <svg class="grade-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                      <line x1="18" y1="6" x2="6" y2="18"></line>
+                      <line x1="6" y1="6" x2="18" y2="18"></line>
+                    </svg>
+                  </span>
+                  <span class="grade-text">Неверно</span>
+                </button>
+              </div>
             </div>
           `;
         });
@@ -336,13 +418,18 @@ document.addEventListener("DOMContentLoaded", () => {
       if (isPending) {
         actionBtnHtml = `
           <button class="btn-confirm-single" data-sub-id="${sub.id}">
-            Подтвердить оценку
+            Подтвердить оценку (${sub.score}/${totalQ})
           </button>
         `;
       } else {
         actionBtnHtml = `
-          <div class="btn-confirmed-static">
-            <span>✓ Оценка утверждена ученику</span>
+          <div class="confirmed-status-wrap">
+            <div class="btn-confirmed-static">
+              <span>✓ Оценка утверждена (${sub.score}/${totalQ})</span>
+            </div>
+            <button class="btn-save-regrade hidden" data-sub-id="${sub.id}">
+              Сохранить изменения (${sub.score}/${totalQ})
+            </button>
           </div>
         `;
       }
@@ -354,13 +441,19 @@ document.addEventListener("DOMContentLoaded", () => {
             <div class="student-class">${escapeHtml(sub.class_name || "Класс не указан")} • ⏱ ${timeStr}</div>
           </div>
           <div class="submission-stats">
-            <div class="score-badge">${sub.score}/${sub.total_questions} (${pct}%)</div>
+            <div class="score-badge">${scoreBadgeHtml}</div>
             ${statusBadge}
+          </div>
+          <div class="accordion-arrow">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <polyline points="6 9 12 15 18 9"></polyline>
+            </svg>
           </div>
         </div>
 
         <div class="card-details">
-          <div class="answers-title">Ответы ученика по вопросам:</div>
+          ${progressHtml}
+          <div class="answers-title">Ответы ученика по заданиям:</div>
           ${answersHtml}
           <div class="card-actions-bar">
             ${actionBtnHtml}
@@ -374,6 +467,89 @@ document.addEventListener("DOMContentLoaded", () => {
         card.classList.toggle("expanded");
       });
 
+      // Grade buttons event handling for this card
+      card.querySelectorAll(".btn-grade").forEach((btn) => {
+        btn.addEventListener("click", (e) => {
+          e.stopPropagation();
+          const qIdx = parseInt(btn.getAttribute("data-q-idx"), 10);
+          const isCorrectChoice = btn.classList.contains("btn-grade-correct");
+          const wasActive = btn.classList.contains("active");
+
+          const qCard = btn.closest(".teacher-q-card");
+          const btnCorr = qCard.querySelector(".btn-grade-correct");
+          const btnIncorr = qCard.querySelector(".btn-grade-incorrect");
+
+          if (wasActive) {
+            // Tapping an already selected button untoggles it!
+            btn.classList.remove("active");
+            qCard.classList.remove("card-correct", "card-incorrect");
+            if (sub.answers && sub.answers[qIdx]) {
+              sub.answers[qIdx].is_correct = null;
+            }
+          } else {
+            // Select choice
+            if (isCorrectChoice) {
+              btnCorr.classList.add("active");
+              btnIncorr.classList.remove("active");
+              qCard.classList.add("card-correct");
+              qCard.classList.remove("card-incorrect");
+              if (sub.answers && sub.answers[qIdx]) {
+                sub.answers[qIdx].is_correct = true;
+              }
+            } else {
+              btnIncorr.classList.add("active");
+              btnCorr.classList.remove("active");
+              qCard.classList.add("card-incorrect");
+              qCard.classList.remove("card-correct");
+              if (sub.answers && sub.answers[qIdx]) {
+                sub.answers[qIdx].is_correct = false;
+              }
+            }
+          }
+
+          // Trigger light tactile feedback
+          triggerHapticLight();
+
+          // Dynamically recalculate score for this submission
+          const currentScore = sub.answers.filter((x) => x.is_correct === true).length;
+          const currentGradedTotal = sub.answers.filter((x) => x.is_correct === true || x.is_correct === false).length;
+          sub.score = currentScore;
+          const newPct = Math.round((currentScore / totalQ) * 100);
+
+          // Update header score badge
+          const scoreBadge = card.querySelector(".score-badge");
+          if (scoreBadge) {
+            if (sub.status === "pending" && currentGradedTotal === 0) {
+              scoreBadge.innerHTML = `<span class="score-unrated">Ожидает проверки</span>`;
+            } else {
+              scoreBadge.innerHTML = `<span class="score-grading">${currentScore}/${totalQ} (${newPct}%)</span>`;
+            }
+          }
+
+          // Update progress box if present
+          const progressNums = card.querySelector(".progress-nums");
+          if (progressNums) {
+            progressNums.innerHTML = `<strong>${currentGradedTotal}</strong> из ${totalQ}`;
+          }
+          const progressFill = card.querySelector(".grading-progress-fill");
+          if (progressFill) {
+            progressFill.style.width = `${Math.round((currentGradedTotal / totalQ) * 100)}%`;
+          }
+
+          // Update action buttons text & reveal regrade save button
+          const confirmBtn = card.querySelector(".btn-confirm-single");
+          if (confirmBtn) {
+            confirmBtn.textContent = `Подтвердить оценку (${currentScore}/${totalQ})`;
+          }
+
+          const regradeBtn = card.querySelector(".btn-save-regrade");
+          if (regradeBtn) {
+            regradeBtn.classList.remove("hidden");
+            regradeBtn.textContent = `Сохранить изменения (${currentScore}/${totalQ})`;
+          }
+        });
+      });
+
       // Confirm Single Button
       const confirmBtn = card.querySelector(".btn-confirm-single");
       if (confirmBtn) {
@@ -383,12 +559,43 @@ document.addEventListener("DOMContentLoaded", () => {
         });
       }
 
+      // Regrade Save Button
+      const regradeBtn = card.querySelector(".btn-save-regrade");
+      if (regradeBtn) {
+        regradeBtn.addEventListener("click", (e) => {
+          e.stopPropagation();
+          confirmSingleSubmission(sub.id, regradeBtn);
+        });
+      }
+
       elSubmissionsList.appendChild(card);
     });
   }
 
   function confirmSingleSubmission(subId, btnEl) {
+    const sub = currentSubmissions.find((s) => s.id === subId);
+    if (!sub) return;
+
+    const totalQ = sub.total_questions || (sub.answers ? sub.answers.length : 1);
+    const gradedTotal = sub.answers
+      ? sub.answers.filter((x) => x.is_correct === true || x.is_correct === false).length
+      : 0;
+    const unrated = totalQ - gradedTotal;
+
+    if (unrated > 0) {
+      const confirmMsg = `Вы проверили ${gradedTotal} из ${totalQ} заданий.\nОставшиеся ${unrated} будут засчитаны как неверные (0 баллов).\n\nПодтвердить оценку ${sub.score}/${totalQ}?`;
+      if (!confirm(confirmMsg)) {
+        return;
+      }
+      sub.answers.forEach((a) => {
+        if (a.is_correct === null || a.is_correct === undefined) {
+          a.is_correct = false;
+        }
+      });
+    }
+
     btnEl.disabled = true;
+    const originalText = btnEl.textContent;
     btnEl.textContent = "Сохраняем...";
 
     fetch("/api/teacher/confirm", {
@@ -397,6 +604,8 @@ document.addEventListener("DOMContentLoaded", () => {
       body: JSON.stringify({
         teacher_id: teacherId,
         submission_id: subId,
+        score: sub.score,
+        answers: sub.answers,
       }),
     })
       .then((res) => res.json())
@@ -404,19 +613,19 @@ document.addEventListener("DOMContentLoaded", () => {
         if (data.error) throw new Error(data.error);
 
         // Update local object
-        const sub = currentSubmissions.find((s) => s.id === subId);
-        if (sub) {
-          sub.status = "confirmed";
+        sub.status = "confirmed";
+        if (data.submission && typeof data.submission.score === "number") {
+          sub.score = data.submission.score;
         }
 
-        triggerHaptic();
-        showToast("Оценка подтверждена! Ученик получил уведомление.");
+        triggerHapticSuccess();
+        showToast(`Оценка (${sub.score}/${totalQ}) подтверждена! Ученик получил уведомление.`);
         updateCountsAndBanner();
         renderSubmissions();
       })
       .catch((err) => {
         btnEl.disabled = false;
-        btnEl.textContent = "Подтвердить оценку";
+        btnEl.textContent = originalText;
         alert("Ошибка: " + err.message);
       });
   }
@@ -470,8 +679,18 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   function triggerHaptic() {
+    triggerHapticSuccess();
+  }
+
+  function triggerHapticSuccess() {
     if (tg?.HapticFeedback) {
       tg.HapticFeedback.notificationOccurred("success");
+    }
+  }
+
+  function triggerHapticLight() {
+    if (tg?.HapticFeedback) {
+      tg.HapticFeedback.impactOccurred("light");
     }
   }
 

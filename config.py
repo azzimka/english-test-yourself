@@ -3,7 +3,7 @@ import json
 from pathlib import Path
 from dotenv import load_dotenv
 
-load_dotenv()
+load_dotenv(override=True)
 
 BASE_DIR = Path(__file__).resolve().parent
 DATA_DIR = BASE_DIR / "data"
@@ -28,10 +28,11 @@ GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
 GROQ_MODEL = os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")
 
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
-GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.6-flash")
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.5-flash-lite")
+PRIMARY_AI_PROVIDER = os.getenv("PRIMARY_AI_PROVIDER", "groq").lower().strip()
 
 # Mini App Web Server settings
-WEBAPP_URL = os.getenv("WEBAPP_URL", "").rstrip("/")
+WEBAPP_URL = os.getenv("WEBAPP_URL", "").strip().rstrip("/")
 WEB_PORT = int(os.getenv("WEB_PORT", "8080"))
 WEB_HOST = os.getenv("WEB_HOST", "0.0.0.0")
 WEB_DIR = BASE_DIR / "web"

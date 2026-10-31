@@ -1,13 +1,164 @@
+import os
 import json
 import re
 import logging
 import asyncio
-from typing import List, Optional, Tuple
-from pydantic import BaseModel, Field
+from typing import List, Optional, Tuple, Any
+from pydantic import BaseModel, Field, field_validator, model_validator
 from groq import AsyncGroq
-from config import GROQ_API_KEY, GROQ_MODEL, GEMINI_API_KEY, GEMINI_MODEL
+from config import GROQ_API_KEY, GROQ_MODEL, GEMINI_API_KEY, GEMINI_MODEL, PRIMARY_AI_PROVIDER
 
 logger = logging.getLogger(__name__)
+
+
+# =====================================================================
+# =====================================================================
+# Answer Option Matching Helper & Question Type Detection
+# =====================================================================
+
+MULTIPLE_CHOICE_REGEX = re.compile(
+    r"\b("
+    r"choose\s+(?:two|three|four|\d+)"
+    r"|select\s+(?:two|three|four|\d+|all)"
+    r"|which\s+(?:two|three|four|\d+)"
+    r"|tick\s+(?:two|three|four|\d+|all)"
+    r"|pick\s+(?:two|three|four|\d+|all)"
+    r"|mark\s+(?:two|three|four|\d+|all)"
+    r"|выберите\s+(?:два|три|четыре|несколько|все|\d+)"
+    r"|отметьте\s+(?:два|три|четыре|несколько|все|\d+)"
+    r"|укажите\s+(?:два|три|четыре|несколько|\d+)"
+    r"|select\s+all\s+that\s+apply"
+    r"|choose\s+all\s+that\s+apply"
+    r"|more\s+than\s+one\s+(?:option|answer|variant)"
+    r")\b",
+    re.IGNORECASE
+)
+
+
+def _match_single_answer(ans: str, options: List[str]) -> Optional[str]:
+    """Matches a single candidate answer against the list of options."""
+    if not options or not ans:
+        return None
+    ans_clean = str(ans).strip()
+    if not ans_clean:
+        return None
+
+    # 1. Exact match
+    for opt in options:
+        if opt.strip().lower() == ans_clean.lower():
+            return opt
+
+    # 2. Single letter match ('A', 'a', 'A)', 'A.')
+    m = re.match(r"^([A-Za-zА-Яа-я])(?:[.)\-:]|$)", ans_clean)
+    if m:
+        letter = m.group(1).upper()
+        for opt in options:
+            opt_m = re.match(r"^([A-Za-zА-Яа-я])(?:[.)\-:]|$)", opt.strip())
+            if opt_m and opt_m.group(1).upper() == letter:
+                return opt
+
+    # 3. Normalized text matching
+    def _norm(t: str) -> str:
+        s = t.strip().lower()
+        for prefix in ["a)", "b)", "c)", "d)", "e)", "f)", "g)", "h)", "a.", "b.", "c.", "d.", "e.", "f.", "g.", "h."]:
+            if s.startswith(prefix):
+                s = s[len(prefix):].strip()
+                break
+        return s
+
+    norm_ans = _norm(ans_clean)
+    if norm_ans:
+        for opt in options:
+            norm_opt = _norm(opt)
+            if norm_ans == norm_opt or (len(norm_ans) > 2 and norm_ans in norm_opt):
+                return opt
+
+    return None
+
+
+def match_answer_to_options_list(ans: Any, options: List[str]) -> List[str]:
+    """
+    Matches candidate answer(s) to a list of option strings from `options`.
+    Supports:
+    - Lists of answers: ["A", "C"] or ["A) Apple", "C) Carrot"]
+    - Delimited multiple answers: "A, C", "A and C", "15: A, C", "A & D"
+    - Space-separated single letters: "A C", "15: B D"
+    - Concatenated letters: "AC", "15: BD" (when matching distinct option letters)
+    - Single answers: "A", "apple", "A) Apple"
+    - Single answers with commas: "A) Yes, I do" (exact option matches take precedence)
+    """
+    if not options or ans is None:
+        if isinstance(ans, list):
+            return [str(x).strip() for x in ans if str(x).strip()]
+        return [str(ans).strip()] if str(ans or "").strip() else []
+
+    # If already a list
+    if isinstance(ans, list):
+        matched = []
+        for item in ans:
+            m = _match_single_answer(str(item), options)
+            chosen = m if m else str(item).strip()
+            if chosen and chosen not in matched:
+                matched.append(chosen)
+        matched.sort(key=lambda x: options.index(x) if x in options else 999)
+        return matched
+
+    ans_clean = str(ans).strip()
+    if not ans_clean:
+        return []
+
+    # Strip question number prefix if present (e.g. '15: A, C' or '14-15: B D' or 'Q1: B')
+    ans_without_prefix = re.sub(
+        r"^(?:Question|Task|Item|Вопрос|Задание|№|Q)?\s*\d+(?:\s*[-–—]\s*\d+)?\s*[:.)\-–—]\s*",
+        "",
+        ans_clean,
+        flags=re.IGNORECASE
+    ).strip()
+
+    candidate = ans_without_prefix or ans_clean
+
+    # 1. Try matching the entire string as a single option first (takes priority over comma splitting)
+    single_match = _match_single_answer(candidate, options)
+    if single_match:
+        return [single_match]
+
+    # 2. Tokenize on delimiters: commas, semicolons, slashes, or 'and' / '&' / 'и'
+    tokens = [tok.strip() for tok in re.split(r"[,;/]|\s+(?:and|&|и)\s+", candidate) if tok.strip()]
+    if len(tokens) <= 1:
+        # Check for space-separated single letters: e.g. "A C" or "B D E"
+        if re.match(r"^([A-Za-zА-Яа-я](?:\s+[A-Za-zА-Яа-я])+)$", candidate):
+            tokens = candidate.split()
+        # Check for concatenated letters: e.g. "AC" or "BD"
+        elif re.match(r"^([A-Za-zА-Яа-я]{2,5})$", candidate):
+            candidate_chars = list(candidate)
+            matches = [_match_single_answer(c, options) for c in candidate_chars]
+            if all(m is not None for m in matches) and len(set(matches)) == len(matches):
+                tokens = candidate_chars
+
+    if len(tokens) > 1:
+        matched_multi = []
+        for tok in tokens:
+            m = _match_single_answer(tok, options)
+            if m and m not in matched_multi:
+                matched_multi.append(m)
+        if len(matched_multi) >= 2 or (len(matched_multi) == len(tokens) and len(matched_multi) > 0):
+            matched_multi.sort(key=lambda x: options.index(x) if x in options else 999)
+            return matched_multi
+
+    # 3. Fallback on original string
+    s_orig = _match_single_answer(ans_clean, options)
+    if s_orig:
+        return [s_orig]
+
+    return [ans_clean] if ans_clean else []
+
+
+def match_answer_to_options(ans: Any, options: List[str]) -> str:
+    """
+    Matches candidate answer(s) to a comma-separated string of matched options.
+    """
+    matched = match_answer_to_options_list(ans, options)
+    return ", ".join(matched)
 
 
 # =====================================================================
@@ -15,17 +166,235 @@ logger = logging.getLogger(__name__)
 # =====================================================================
 
 class ParsedQuestion(BaseModel):
-    question_text: str = Field(description="Текст вопроса или задание с пропуском")
+    question_text: str = Field(default="Question", description="Текст вопроса или задание с пропуском")
     context_text: Optional[str] = Field(default=None, description="Текст для чтения, если несколько вопросов относятся к одному рассказу/статье")
     options: List[str] = Field(default_factory=list, description="Список вариантов ответа (например, ['A) apple', 'B) banana']). Если вопрос с открытым вводом слова, список пуст.")
-    correct_answer: str = Field(description="Правильный вариант ответа или слово. Если правильный ответ был отмечен галочкой/звездочкой/ключом в конце, извлеки его. Иначе реши сам.")
+    correct_answer: str = Field(default="", description="Правильный вариант ответа или слово. Для множественного выбора содержит все правильные ответы через запятую.")
+    correct_answers: Optional[List[str]] = Field(default=None, description="Список правильных ответов (для вопросов с множественным выбором)")
+    question_type: str = Field(default="single_choice", description="Тип вопроса: 'single_choice', 'multiple_choice' или 'open_text'")
     explanation: Optional[str] = Field(default=None, description="Краткое пояснение грамматического или лексического правила")
+    image_url: Optional[str] = Field(default=None, description="Относительный URL к изображению задания")
+
+    @model_validator(mode="before")
+    @classmethod
+    def pre_validate_question(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            # 1. If correct_answers is provided but correct_answer is missing or empty
+            ca = data.get("correct_answer")
+            cas = data.get("correct_answers")
+            if (ca is None or str(ca).strip() == "") and cas:
+                if isinstance(cas, list):
+                    data["correct_answer"] = ", ".join(str(x).strip() for x in cas if str(x).strip())
+                else:
+                    data["correct_answer"] = str(cas).strip()
+
+            # 2. Normalize question_type if passed
+            qt = data.get("question_type")
+            if qt:
+                qt_str = str(qt).strip().lower()
+                if qt_str in ("multiple_choice", "multiple", "multi_choice", "multiple-choice", "multichoice", "multiple choice"):
+                    data["question_type"] = "multiple_choice"
+                elif qt_str in ("open_text", "open", "text", "cloze", "word_formation", "gap_fill", "open text"):
+                    data["question_type"] = "open_text"
+                elif qt_str in ("single_choice", "single", "single-choice", "choice", "single choice"):
+                    data["question_type"] = "single_choice"
+        return data
+
+    @field_validator("question_text", mode="before")
+    @classmethod
+    def sanitize_question_text(cls, v: Any) -> str:
+        if v is None:
+            return "Question"
+        s = str(v).strip()
+        if not s:
+            return "Question"
+        # If question text has runs of 2+ spaces (lost gap in PDF extraction) and lacks _____
+        if "____" not in s:
+            s = re.sub(r"(?<=[a-zA-Z0-9,\'’])\s{2,}(?=[a-zA-Z0-9.\'’])", " _____ ", s)
+            s = re.sub(r"(?<=:\s)\s{2,}(?=[a-zA-Z0-9])", " _____ ", s)
+        return s
+
+    @field_validator("options", mode="before")
+    @classmethod
+    def sanitize_options(cls, v: Any) -> List[str]:
+        if v is None:
+            return []
+        if isinstance(v, dict):
+            result = []
+            for key, val in v.items():
+                if val is not None:
+                    s_val = str(val).strip()
+                    s_key = str(key).strip()
+                    if s_val:
+                        if s_key and not re.match(rf"^{re.escape(s_key)}\s*[.):\-]\s*", s_val, re.IGNORECASE):
+                            result.append(f"{s_key}) {s_val}")
+                        else:
+                            result.append(s_val)
+            return result
+        if isinstance(v, list):
+            cleaned = []
+            for item in v:
+                if item is None:
+                    continue
+                if isinstance(item, dict):
+                    label = item.get("label") or item.get("option") or item.get("key") or ""
+                    val = item.get("text") or item.get("value") or item.get("val") or ""
+                    if val:
+                        s_val = str(val).strip()
+                        s_label = str(label).strip()
+                        if s_label and not re.match(rf"^{re.escape(s_label)}\s*[.):\-]\s*", s_val, re.IGNORECASE):
+                            cleaned.append(f"{s_label}) {s_val}")
+                        else:
+                            cleaned.append(s_val)
+                    elif label:
+                        cleaned.append(str(label).strip())
+                else:
+                    s = str(item).strip()
+                    if s:
+                        cleaned.append(s)
+            return cleaned
+        if isinstance(v, str) and v.strip():
+            lines = [line.strip() for line in v.split("\n") if line.strip()]
+            return lines if len(lines) > 1 else [v.strip()]
+        return []
+
+    @field_validator("correct_answer", mode="before")
+    @classmethod
+    def sanitize_correct_answer(cls, v: Any) -> str:
+        if v is None:
+            return ""
+        if isinstance(v, (int, float, bool)):
+            return str(v)
+        if isinstance(v, list):
+            items = []
+            for item in v:
+                if item is not None:
+                    s = cls.sanitize_correct_answer(item)
+                    if s:
+                        items.append(s)
+            return ", ".join(items)
+        if isinstance(v, dict):
+            for k in ("correct_answers", "correct_answer", "answer", "value", "val", "text", "option", "key"):
+                if k in v and v[k] is not None:
+                    return cls.sanitize_correct_answer(v[k])
+            for val in v.values():
+                if val is not None:
+                    return cls.sanitize_correct_answer(val)
+            return ""
+        return str(v).strip()
+
+    @field_validator("correct_answers", mode="before")
+    @classmethod
+    def sanitize_correct_answers(cls, v: Any) -> Optional[List[str]]:
+        if v is None:
+            return None
+        if isinstance(v, list):
+            cleaned = []
+            for item in v:
+                if item is not None:
+                    s = str(item).strip()
+                    if s:
+                        cleaned.append(s)
+            return cleaned
+        if isinstance(v, str) and v.strip():
+            parts = [p.strip() for p in v.split(",") if p.strip()]
+            return parts if parts else [v.strip()]
+        return None
+
+    @field_validator("explanation", "context_text", "image_url", mode="before")
+    @classmethod
+    def sanitize_nullable_strings(cls, v: Any) -> Optional[str]:
+        if v is None:
+            return None
+        s = str(v).strip()
+        return s if s else None
+
+    @model_validator(mode="after")
+    def resolve_missing_answer(self) -> "ParsedQuestion":
+        ans = (self.correct_answer or "").strip()
+
+        # Step 1: Open Cloze without options
+        if not self.options:
+            self.question_type = "open_text"
+            self.correct_answers = [self.correct_answer] if self.correct_answer else []
+            return self
+
+        # Step 2: Determine if multiple choice
+        is_multi = False
+        if self.question_type == "multiple_choice":
+            is_multi = True
+        elif self.correct_answers and len(self.correct_answers) > 1:
+            is_multi = True
+        elif MULTIPLE_CHOICE_REGEX.search(self.question_text):
+            is_multi = True
+
+        if not ans or ans.lower() in ("none", "null", "n/a", "unknown", "undefined"):
+            if self.options:
+                self.correct_answer = self.options[0]
+                self.correct_answers = [self.options[0]]
+            else:
+                self.correct_answer = ""
+                self.correct_answers = []
+        else:
+            source = self.correct_answers if (self.correct_answers and len(self.correct_answers) > 1) else ans
+            matched_list = match_answer_to_options_list(source, self.options)
+            if matched_list:
+                self.correct_answer = ", ".join(matched_list)
+                self.correct_answers = matched_list
+                if len(matched_list) > 1:
+                    is_multi = True
+            else:
+                self.correct_answer = ans
+                self.correct_answers = [ans] if ans else []
+
+        if is_multi:
+            self.question_type = "multiple_choice"
+            if not self.correct_answers:
+                self.correct_answers = [self.correct_answer] if self.correct_answer else []
+        else:
+            if self.question_type not in ("single_choice", "multiple_choice", "open_text"):
+                self.question_type = "single_choice"
+            if self.correct_answers is None and self.correct_answer:
+                self.correct_answers = [self.correct_answer]
+
+        return self
 
 
 class ParsedTest(BaseModel):
-    title: str = Field(description="Понятное название теста (например, 'Past Tenses Quiz' или 'Олимпиада 9 класс — Reading & Grammar')")
+    title: str = Field(default="English Test", description="Понятное название теста (например, 'Past Tenses Quiz' или 'Олимпиада 9 класс — Reading & Grammar')")
     description: Optional[str] = Field(default="", description="Краткое описание темы теста")
-    questions: List[ParsedQuestion] = Field(description="Список всех распознанных вопросов")
+    questions: List[ParsedQuestion] = Field(default_factory=list, description="Список всех распознанных вопросов")
+    has_answer_keys: bool = Field(default=False, description="Присутствовали ли ключи к ответам в исходных материалах теста")
+
+    @field_validator("title", mode="before")
+    @classmethod
+    def sanitize_title(cls, v: Any) -> str:
+        if v is None or not str(v).strip():
+            return "English Test"
+        return str(v).strip()
+
+    @field_validator("description", mode="before")
+    @classmethod
+    def sanitize_description(cls, v: Any) -> str:
+        return str(v).strip() if v is not None else ""
+
+    @field_validator("questions", mode="before")
+    @classmethod
+    def sanitize_questions(cls, v: Any) -> list:
+        if v is None:
+            return []
+        return v if isinstance(v, list) else []
+
+    @field_validator("has_answer_keys", mode="before")
+    @classmethod
+    def sanitize_has_answer_keys(cls, v: Any) -> bool:
+        if v is None:
+            return False
+        if isinstance(v, bool):
+            return v
+        if isinstance(v, str):
+            return v.strip().lower() in ("true", "1", "yes", "да")
+        return bool(v)
 
 
 # =====================================================================
@@ -41,9 +410,19 @@ Rules:
 2. If there is a reading passage (Reading Comprehension) that applies to multiple questions, place the passage text in `context_text` for those questions.
 3. If multiple-choice options (A, B, C, D) exist, extract them into the `options` array (formatted as 'A) ...', 'B) ...', etc.).
 4. If it is an open cloze / word formation task (fill in the blank without multiple choice), leave `options` as an empty list [].
-5. Identify the correct answer: look for asterisks (*), pluses (+), bold text, or answer keys at the bottom/end of the materials. If no keys are provided, determine the correct answer yourself.
-6. Provide a concise explanation for the correct answer where appropriate.
-7. Generate a concise, suitable title for the test.
+5. Identify question_type:
+   - "multiple_choice": when a question has options AND requires selecting TWO or more correct answers (e.g. "Choose TWO correct answers", "Select all that apply", or answer key has multiple answers like "15: A, C").
+   - "single_choice": standard question with only ONE correct option.
+   - "open_text": open cloze / word formation task without options.
+6. Identify the correct answer: look for asterisks (*), pluses (+), bold text, or answer keys at the bottom/end of the materials. If no keys are provided, determine the correct answer yourself.
+   - For "multiple_choice", provide all correct answers separated by commas (e.g. "A) apple, C) banana" or "A, C") or list in `correct_answers`.
+7. Provide a concise explanation for the correct answer where appropriate.
+8. Generate a concise, suitable title for the test.
+9. RESTORING BLANKS AND GAPS IN QUESTIONS (CRITICAL):
+   For all fill-in-the-blank or multiple-choice questions, the sentence MUST have the missing word position explicitly marked with `_____` (5 underscores, e.g. "Mother: I _____ buy one if we had the money").
+   In PDF materials, blanks are often represented by multiple spaces (e.g. "he’s   London" or "I   buy"), dots, or omitted entirely. You MUST detect where the chosen option fits and insert `_____` at the grammatically correct place. NEVER output a fill-in-the-blank question without `_____`!
+10. QUESTION 0 AND EXAMPLES:
+   If a question is numbered '0' or marked as an example with multiple-choice options (A, B, C, D), PARSE IT as question 0 so students can solve it. If an answer letter was printed in the gap (e.g. "I A going"), convert it back to a blank `_____` ("I _____ going").
 
 CRITICAL: Output MUST be a valid JSON object matching this exact structure:
 {
@@ -53,6 +432,7 @@ CRITICAL: Output MUST be a valid JSON object matching this exact structure:
     {
       "question_text": "string",
       "context_text": "string or null",
+      "question_type": "single_choice | multiple_choice | open_text",
       "options": ["string"],
       "correct_answer": "string",
       "explanation": "string or null"
@@ -66,13 +446,19 @@ CHUNK_PROMPT = """You are an expert English exam parser.
 Your task is to parse a SPECIFIC BATCH of questions from an English test into JSON format.
 
 CRITICAL RULES:
-1. Parse EVERY SINGLE question present in this batch without omitting or summarizing any. Do NOT include examples (such as Example (0) or items where the answer is already filled in as a demonstration).
+1. Parse EVERY SINGLE question present in this batch without omitting any. If a question is numbered '0' or marked as an example with options (A, B, C, D), INCLUDE IT as question 0 so students can solve it. Ensure any demo answer filled in (e.g. 'I A going') is converted back to a blank '_____' ('I _____ going').
 2. If multiple-choice options (A, B, C, D) exist, put them into `options` (formatted as 'A) ...', 'B) ...', etc.).
 3. If it is an open cloze / word formation task (fill in the blank without multiple choice), leave `options` as an empty list [].
-4. If an Answer Key is provided below, use it to accurately fill `correct_answer`.
-5. If no answer key is provided, determine the correct answer yourself.
-6. Keep `explanation` very brief (1 short sentence) or null to save tokens.
-7. If questions refer to a reading passage in this batch, include that text in `context_text`.
+4. Set `question_type`:
+   - "multiple_choice": if the question requires selecting multiple answers (e.g. "Choose TWO", "Select all", or answer key has multiple options like "A, C").
+   - "single_choice": if standard question with 1 correct option.
+   - "open_text": if open cloze / word formation with empty options.
+5. If an Answer Key is provided below, use it to accurately fill `correct_answer`. For multiple choice, include all correct options (e.g. "A, C" or "A) ... , C) ...").
+6. If no answer key is provided, determine the correct answer yourself.
+7. Keep `explanation` very brief (1 short sentence) or null to save tokens.
+8. If questions refer to a reading passage in this batch, include that text in `context_text`.
+9. GAPS / BLANKS IN QUESTIONS (CRITICAL):
+   Every multiple-choice or cloze question MUST have its blank explicitly written as `_____` (5 underscores, e.g. 'Mother: I _____ buy one if...'). If the source text omitted the blank or has spaces (e.g. 'I   buy' or 'he’s   London'), you MUST restore and insert `_____` at the exact grammatically correct position. NEVER output a question without `_____`!
 
 Output MUST be a valid JSON object:
 {
@@ -80,6 +466,7 @@ Output MUST be a valid JSON object:
     {
       "question_text": "string",
       "context_text": "string or null",
+      "question_type": "single_choice | multiple_choice | open_text",
       "options": ["string"],
       "correct_answer": "string",
       "explanation": "string or null"
@@ -110,9 +497,25 @@ QUESTION_START_PATTERN = re.compile(
     re.MULTILINE
 )
 
-ANSWER_KEY_PATTERN = re.compile(
-    r"(?:^|\n)\s*(?:ANSWER\s*KEY[S]?|ANSWERS|KEYS|ОТВЕТЫ|КЛЮЧИ)\b[\s:]*(.*)$",
-    re.IGNORECASE | re.DOTALL
+# Header pattern matching candidate Answer Key section headings
+ANSWER_KEY_HEADER_PATTERN = re.compile(
+    r"(?:^|\n)[ \t*=\-#_]*(?:"
+    r"ANSWER\s*KEY[S]?"
+    r"|ANSWER\s*SHEET[S]?"
+    r"|CORRECT\s*ANSWERS?"
+    r"|ПРАВИЛЬНЫЕ\s*ОТВЕТЫ"
+    r"|(?:ANSWERS?|KEYS?|ОТВЕТЫ|КЛЮЧИ)(?:\s*(?:&|and|и)\s*(?:KEYS?|ANSWERS?|ОТВЕТЫ|КЛЮЧИ))?"
+    r"(?:\s+(?:to|к)\s+[^\n:]+)?"
+    r")\b[ \t*=\-#_]*(?:[:\-–—]|\n|$)",
+    re.IGNORECASE
+)
+
+# Pattern verifying that the candidate block actually contains answer key entries
+# (e.g. "1. A", "1) went", "1 - True", "1: B", "1 A 2 B", "Q1: C")
+ANSWER_KEY_ENTRY_PATTERN = re.compile(
+    r"(?:^|\s|[.,;:(\[])(?:Q|q|Question|Task|Задание|Вопрос|Item|№)?\s*(\d{1,3})\s*[:.)\-–—]\s*(\S+)"
+    r"|\b(\d{1,3})\s*[:.)\-–—]?\s*([A-Ha-h]|True|False|Not Given|T|F)\b",
+    re.IGNORECASE
 )
 
 READING_PASSAGE_PATTERN = re.compile(
@@ -145,14 +548,21 @@ def extract_answer_keys(text: str) -> Tuple[str, str]:
 
     Returns:
         Tuple of (body_text_without_keys, answer_keys_text).
-        If no answer key found, answer_keys_text is empty string.
+        If no answer key found or candidate section has no valid keys,
+        answer_keys_text is empty string and body_text is the original text.
     """
-    match = ANSWER_KEY_PATTERN.search(text)
-    if match:
-        key_start = match.start()
-        body_text = text[:key_start].strip()
-        answer_keys_text = text[key_start:].strip()
-        return body_text, answer_keys_text
+    if not text or not text.strip():
+        return text, ""
+
+    matches = list(ANSWER_KEY_HEADER_PATTERN.finditer(text))
+    # Iterate from the end of the document backwards
+    for m in reversed(matches):
+        candidate_keys = text[m.start():].strip()
+        # Verify candidate block has actual key entries
+        if ANSWER_KEY_ENTRY_PATTERN.search(candidate_keys):
+            body_text = text[:m.start()].strip()
+            return body_text, candidate_keys
+
     return text, ""
 
 
@@ -164,8 +574,9 @@ def extract_max_key_number(answer_keys_text: str) -> int:
     if not answer_keys_text:
         return 0
     matches = re.findall(
-        r"(?:^|\s|[.,;:(\[])(?:Q|q|Question|№)?\s*(\d+)\s*[:.)\-]?\s*([A-Da-d]|True|False|Not Given)\b",
-        answer_keys_text
+        r"(?:^|\s|[.,;:(\[])(?:Q|q|Question|Task|Задание|Item|№)?\s*(\d+)\s*[:.)\-]?\s*([A-Ha-h]|True|False|Not Given|T|F)\b",
+        answer_keys_text,
+        re.IGNORECASE
     )
     if matches:
         return max(int(m[0]) for m in matches)
@@ -211,9 +622,6 @@ def _find_question_positions(text: str) -> List[Tuple[int, int]]:
     positions = []
     for match in QUESTION_START_PATTERN.finditer(text):
         q_num = int(match.group(1))
-        # Skip example question 0 if present
-        if q_num == 0:
-            continue
         pos = match.start()
         # Adjust position to start of line (skip leading newline from pattern)
         if text[pos] == '\n':
@@ -544,13 +952,102 @@ async def parse_single_chunk(
     return questions
 
 
+async def _attach_images_and_vision_solutions(
+    questions: List[ParsedQuestion],
+    images: Optional[List[Any]]
+) -> None:
+    """
+    Correlates extracted images/diagrams with parsed test questions.
+    Attaches image_url to matching questions and invokes Vision AI to solve
+    diagram-based questions if correct_answer was missing or undetermined.
+    """
+    if not images or not questions:
+        return
+
+    from services.vision_solver import solve_question_with_vision
+
+    visual_kw = re.compile(
+        r"\b(picture|image|figure|diagram|illustration|drawing|triangle|shape|graph|рисунок|схема|чертеж|фигура|на рисунке)\b",
+        re.IGNORECASE
+    )
+
+    unassigned_images = list(images)
+
+    # 1. Exact question number matching
+    for idx, q in enumerate(questions, start=1):
+        # Determine question number from order or question_text
+        match_q_num = idx
+        m = re.match(
+            r"^(?:Question|Task|Exercise|Problem|Задание|Вопрос|Item|№)?\s*(\d+)",
+            q.question_text.strip(),
+            re.IGNORECASE
+        )
+        if m:
+            match_q_num = int(m.group(1))
+
+        matched_img = None
+        for img in unassigned_images:
+            if getattr(img, "question_num", None) == match_q_num:
+                matched_img = img
+                break
+
+        if matched_img:
+            q.image_url = matched_img.image_url
+            unassigned_images.remove(matched_img)
+            logger.info("Attached image %s to Question #%d", matched_img.image_url, match_q_num)
+
+            # Vision AI solver: If question mentions visual cues or has image, solve with Vision AI
+            if getattr(matched_img, "image_bytes", None):
+                try:
+                    vision_result = await solve_question_with_vision(
+                        image_bytes=matched_img.image_bytes,
+                        question_text=q.question_text,
+                        options=q.options
+                    )
+                    if vision_result:
+                        ans, expl = vision_result
+                        if ans:
+                            q.correct_answer = match_answer_to_options(ans, q.options) if q.options else ans
+                            if expl:
+                                q.explanation = expl
+                            logger.info("Vision AI updated correct_answer for Question #%d: %s", match_q_num, q.correct_answer)
+                except Exception as e:
+                    logger.debug("Vision solver attempt failed for Question #%d: %s", match_q_num, e)
+
+    # 2. Text reference matching for remaining unassigned images
+    if unassigned_images:
+        for idx, q in enumerate(questions, start=1):
+            if q.image_url:
+                continue
+            if visual_kw.search(q.question_text) and unassigned_images:
+                img = unassigned_images.pop(0)
+                q.image_url = img.image_url
+                logger.info("Attached image %s to Question #%d via keyword match", img.image_url, idx)
+                if getattr(img, "image_bytes", None):
+                    try:
+                        vision_result = await solve_question_with_vision(
+                            image_bytes=img.image_bytes,
+                            question_text=q.question_text,
+                            options=q.options
+                        )
+                        if vision_result:
+                            ans, expl = vision_result
+                            if ans:
+                                q.correct_answer = match_answer_to_options(ans, q.options) if q.options else ans
+                                if expl:
+                                    q.explanation = expl
+                    except Exception as e:
+                        logger.debug("Vision solver attempt failed: %s", e)
+
+
 # =====================================================================
 # Main Entry Point
 # =====================================================================
 
 async def parse_test_content(
     text_content: str,
-    test_type: str = "regular"
+    test_type: str = "regular",
+    images: Optional[List[Any]] = None
 ) -> ParsedTest:
     """
     Parses test content using Groq API with intelligent chunking for large tests.
@@ -558,12 +1055,14 @@ async def parse_test_content(
 
     For tests with <= 25 questions: single request (fast path).
     For tests with > 25 questions: parallel chunked processing via asyncio.gather.
+    Attaches any extracted images and resolves visual questions via Vision AI.
     """
     if not text_content or not text_content.strip():
         raise ValueError("Содержимое теста пусто или не удалось извлечь текст.")
 
     # --- Step 1: Extract answer keys from the end of the document ---
     body_text, answer_keys_text = extract_answer_keys(text_content)
+    has_keys = bool(answer_keys_text and answer_keys_text.strip())
     if answer_keys_text:
         logger.info("Answer key section found and extracted (%d chars)", len(answer_keys_text))
 
@@ -577,27 +1076,46 @@ async def parse_test_content(
     # Build the model fallback chain
     models = _build_model_chain()
 
+    # --- Primary Gemini Provider branch (if configured) ---
+    if PRIMARY_AI_PROVIDER == "gemini" and GEMINI_API_KEY and not os.getenv("PYTEST_CURRENT_TEST"):
+        try:
+            logger.info("PRIMARY_AI_PROVIDER is set to 'gemini'. Processing directly with Gemini API...")
+            parsed = await _parse_with_gemini(text_content, test_type)
+            parsed.has_answer_keys = has_keys
+            if images and parsed and parsed.questions:
+                await _attach_images_and_vision_solutions(parsed.questions, images)
+            return parsed
+        except Exception as e:
+            logger.warning("Gemini primary parsing failed: %s. Falling back to Groq pipeline...", e)
+
     # --- Chunked path: large test -> parallel processing ---
     if is_large_test:
         logger.info(
             "Large test detected (%d estimated questions / %d chars). Using chunked parallel processing.",
             estimated_count, len(body_text)
         )
-        return await _parse_chunked(body_text, answer_keys_text, test_type, models, expected_count=estimated_count)
+        parsed = await _parse_chunked(body_text, answer_keys_text, test_type, models, expected_count=estimated_count)
+    else:
+        # --- Fast path: small test (<= 25 questions AND <= 3500 chars) ---
+        logger.info("Small test detected (%d questions). Using fast path single request.", estimated_count)
+        parsed = await _parse_single_request(text_content, test_type, models)
 
-    # --- Fast path: small test (<= 25 questions AND <= 3500 chars) ---
-    logger.info("Small test detected (%d questions). Using fast path single request.", estimated_count)
-    parsed = await _parse_single_request(text_content, test_type, models)
+        # --- Auto-Healing Audit for Fast Path ---
+        target_count = max(estimated_count, max_key)
+        if target_count > 0 and len(parsed.questions) < int(target_count * 0.85):
+            logger.warning(
+                "Auto-Healing triggered! Fast path parsed %d questions, but expected ~%d. "
+                "Rerunning with parallel chunked parser...",
+                len(parsed.questions), target_count
+            )
+            parsed = await _parse_chunked(body_text, answer_keys_text, test_type, models, expected_count=target_count)
 
-    # --- Auto-Healing Audit for Fast Path ---
-    target_count = max(estimated_count, max_key)
-    if target_count > 0 and len(parsed.questions) < int(target_count * 0.85):
-        logger.warning(
-            "Auto-Healing triggered! Fast path parsed %d questions, but expected ~%d. "
-            "Rerunning with parallel chunked parser...",
-            len(parsed.questions), target_count
-        )
-        return await _parse_chunked(body_text, answer_keys_text, test_type, models, expected_count=target_count)
+    # Ensure has_answer_keys is explicitly set on the parsed test
+    parsed.has_answer_keys = has_keys
+
+    # --- Attach extracted images and run Vision AI if applicable ---
+    if images and parsed and parsed.questions:
+        await _attach_images_and_vision_solutions(parsed.questions, images)
 
     return parsed
 
@@ -644,6 +1162,8 @@ async def _parse_single_request(
 
             cleaned = clean_json_string(raw_response)
             data = json.loads(cleaned)
+            _, answer_keys_text = extract_answer_keys(text_content)
+            data["has_answer_keys"] = bool(answer_keys_text and answer_keys_text.strip())
             parsed = ParsedTest(**data)
             logger.info("Successfully parsed test in single request (%d questions)", len(parsed.questions))
             return parsed
@@ -735,10 +1255,12 @@ async def _parse_chunked(
 
     # --- Build ParsedTest ---
     parsed_questions = [ParsedQuestion(**q) for q in all_questions]
+    has_keys = bool(answer_keys_text and answer_keys_text.strip())
     parsed = ParsedTest(
         title=title,
         description=description or "",
         questions=parsed_questions,
+        has_answer_keys=has_keys,
     )
 
     logger.info(
@@ -819,25 +1341,46 @@ async def _parse_with_gemini(text_content: str, test_type: str) -> ParsedTest:
     from google import genai
     from google.genai import types
 
-    logger.info("Attempting test parsing with Gemini model: %s", GEMINI_MODEL)
     gemini_client = genai.Client(api_key=GEMINI_API_KEY)
     contents = [
         f"Тип теста: {test_type}. {PROMPT_SYSTEM}",
         f"Материалы теста:\n\n{text_content}"
     ]
-    response = await gemini_client.aio.models.generate_content(
-        model=GEMINI_MODEL,
-        contents=contents,
-        config=types.GenerateContentConfig(
-            response_mime_type="application/json",
-            response_schema=ParsedTest,
-            temperature=0.2,
-        )
-    )
-    if response.parsed:
-        logger.info("Successfully parsed test with Gemini (%s questions)", len(response.parsed.questions))
-        return response.parsed
-    data = json.loads(response.text)
-    parsed = ParsedTest(**data)
-    logger.info("Successfully parsed test with Gemini (%s questions)", len(parsed.questions))
-    return parsed
+
+    models_to_try = [GEMINI_MODEL, "gemini-3.5-flash-lite", "gemini-3.7-flash"]
+    seen_models = set()
+    unique_models = []
+    for m in models_to_try:
+        if m and m not in seen_models:
+            seen_models.add(m)
+            unique_models.append(m)
+
+    last_err = None
+    for m in unique_models:
+        try:
+            logger.info("Attempting test parsing with Gemini model: %s", m)
+            response = await gemini_client.aio.models.generate_content(
+                model=m,
+                contents=contents,
+                config=types.GenerateContentConfig(
+                    response_mime_type="application/json",
+                    response_schema=ParsedTest,
+                    temperature=0.2,
+                )
+            )
+            _, answer_keys_text = extract_answer_keys(text_content)
+            has_keys = bool(answer_keys_text and answer_keys_text.strip())
+            if response.parsed:
+                logger.info("Successfully parsed test with Gemini %s (%s questions)", m, len(response.parsed.questions))
+                response.parsed.has_answer_keys = has_keys
+                return response.parsed
+            data = json.loads(response.text)
+            data["has_answer_keys"] = has_keys
+            parsed = ParsedTest(**data)
+            logger.info("Successfully parsed test with Gemini %s (%s questions)", m, len(parsed.questions))
+            return parsed
+        except Exception as e:
+            logger.warning("Gemini model %s failed: %s", m, e)
+            last_err = e
+
+    raise last_err or ValueError("All Gemini models failed")

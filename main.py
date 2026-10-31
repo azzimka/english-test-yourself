@@ -8,6 +8,7 @@ from config import BOT_TOKEN, WEB_PORT, WEB_HOST, WEBAPP_URL, ADMIN_IDS
 from database import init_db
 from handlers import admin_router, common_router, student_router, fallback_router
 from services.web_server import create_web_app
+from services.broadcast import notify_teachers_v2_release
 
 logging.basicConfig(
     level=logging.INFO,
@@ -85,6 +86,9 @@ async def main():
 
     logger.info("Deleting webhook and starting polling...")
     await bot.delete_webhook(drop_pending_updates=True)
+
+    # Version 2.0 release announcement (fires exactly once on deploy)
+    asyncio.create_task(notify_teachers_v2_release(bot))
 
     try:
         await dp.start_polling(bot)

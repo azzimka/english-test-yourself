@@ -4,6 +4,7 @@ from aiogram import Router, types, F
 from aiogram.filters import CommandStart, Command
 from aiogram.fsm.context import FSMContext
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo
+from aiogram.exceptions import TelegramBadRequest
 
 from config import ADMIN_IDS, WEBAPP_URL
 from database import get_user_by_telegram_id, register_student
@@ -29,6 +30,12 @@ async def cmd_my_id(message: types.Message):
 @router.message(Command("help"))
 @router.callback_query(F.data == "nav_student_help")
 async def cmd_help(event: types.Message | types.CallbackQuery):
+    if isinstance(event, types.CallbackQuery):
+        try:
+            await event.answer()
+        except TelegramBadRequest:
+            pass
+
     user_id = event.from_user.id
     is_teacher = user_id in ADMIN_IDS
 
@@ -37,6 +44,7 @@ async def cmd_help(event: types.Message | types.CallbackQuery):
             "ℹ️ <b>Инструкция для учителя (Администратора)</b>\n\n"
             "• <b>📝 Создать тест:</b> отправьте файл <b>PDF</b>, <b>Word (.docx)</b> или текст. Задания и варианты распознаются автоматически.\n\n"
             "• <b>📊 Результаты:</b> ведомость в Telegram Mini App для просмотра ответов и утверждения оценок.\n\n"
+            "• <b>🎓 Выдать сертификат:</b> выбор класса и ученика, отправка дипломов и сертификатов.\n\n"
             "• <b>📂 Мои тесты:</b> просмотр списка тестов и удаление устаревших.\n\n"
             "• <b>/start:</b> возврат в главное меню."
         )
@@ -54,7 +62,6 @@ async def cmd_help(event: types.Message | types.CallbackQuery):
 
     if isinstance(event, types.CallbackQuery):
         await event.message.answer(text, reply_markup=inline_kb, parse_mode="HTML")
-        await event.answer()
     else:
         await event.answer(text, reply_markup=inline_kb, parse_mode="HTML")
 
@@ -95,7 +102,8 @@ async def cmd_start(event: types.Message | types.CallbackQuery, state: FSMContex
 
             buttons = [
                 [InlineKeyboardButton(text="📝 Создать новый тест", callback_data="nav_create_test")],
-                [InlineKeyboardButton(text="📂 Мои тесты", callback_data="admin_tests_list")]
+                [InlineKeyboardButton(text="📂 Мои тесты", callback_data="admin_tests_list")],
+                [InlineKeyboardButton(text="🎓 Выдать сертификат", callback_data="nav_issue_cert")],
             ]
 
             inline_kb = InlineKeyboardMarkup(inline_keyboard=buttons)
@@ -207,9 +215,18 @@ async def process_class(message: types.Message, state: FSMContext):
 
 @router.callback_query(F.data == "cancel_action")
 async def process_cancel(callback: types.CallbackQuery, state: FSMContext):
+    try:
+        await callback.answer()
+    except TelegramBadRequest:
+        pass
     await state.clear()
-    await callback.message.edit_text("❌ Действие отменено.", parse_mode="HTML")
-    await callback.answer()
+    try:
+        await callback.message.edit_text("❌ Действие отменено.", parse_mode="HTML")
+    except TelegramBadRequest as e:
+        if "message is not modified" not in str(e).lower():
+            pass
+    except Exception:
+        pass
 
 
 @fallback_router.message(F.text)

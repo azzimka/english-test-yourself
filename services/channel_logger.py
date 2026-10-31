@@ -98,6 +98,7 @@ async def log_test_published(
     title: str,
     test_type: str,
     question_count: int,
+    has_answer_keys: Optional[bool] = None,
 ) -> None:
     """Logs successful test publication to the audit channel."""
     if not LOG_CHANNEL_ID:
@@ -109,11 +110,18 @@ async def log_test_published(
         type_name = "🏆 Олимпиадный тест" if test_type == "olympiad" else "📚 Обычный тест"
         title_str = html.escape(title)
 
+        keys_info = ""
+        if has_answer_keys is not None:
+            if has_answer_keys:
+                keys_info = "\n🔑 <b>Ключи к ответам:</b> найдены в материале"
+            else:
+                keys_info = "\n⚠️ <b>Ключи к ответам:</b> не найдены (требуется проверка учителем)"
+
         text = (
             "✅ <b>Тест успешно опубликован!</b>\n\n"
             f"📌 <b>Название:</b> «{title_str}»\n"
             f"📚 <b>Категория:</b> {type_name}\n"
-            f"🔢 <b>Количество заданий:</b> {question_count}\n"
+            f"🔢 <b>Количество заданий:</b> {question_count}{keys_info}\n"
             f"👨‍🏫 <b>Учитель:</b> {teacher_name} ({user_handle})\n"
             f"⏱ <b>Время:</b> {now_str}"
         )
