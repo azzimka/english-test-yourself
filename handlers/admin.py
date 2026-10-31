@@ -2,6 +2,7 @@ import html
 import logging
 import asyncio
 from io import BytesIO
+from typing import Optional, List, Dict, Any, Tuple
 from aiogram import Router, types, F, Bot
 from aiogram.filters import Command, StateFilter
 from aiogram.fsm.context import FSMContext
